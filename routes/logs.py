@@ -5,7 +5,6 @@ from models import Log, Carteirinha, Job
 from typing import List, Optional
 
 router = APIRouter(
-    prefix="/logs",
     tags=["Logs"]
 )
 
