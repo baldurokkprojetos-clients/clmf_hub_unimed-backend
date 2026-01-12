@@ -44,10 +44,12 @@ async def upload_carteirinhas(
                 io.BytesIO(contents).seek(0)
                 df = pd.read_csv(io.BytesIO(contents), encoding='latin1', sep=';')
         else:
-             df = pd.read_excel(io.BytesIO(contents))
+             # Explicitly use openpyxl engine for .xlsx
+             df = pd.read_excel(io.BytesIO(contents), engine='openpyxl')
         
-        # Normalize columns
-        df.columns = df.columns.str.strip()
+        # Normalize columns (uppercase/lowercase issues handling)
+        # Create a dict of normalized -> original
+        df.columns = df.columns.astype(str).str.strip()
         
         column_mapping = {
             'carteiras': 'Carteirinha',
