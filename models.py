@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, Text, Float
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
@@ -62,6 +62,33 @@ class BaseGuia(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     carteirinha_rel = relationship("Carteirinha", back_populates="guias")
+
+class PeiTemp(Base):
+    __tablename__ = "pei_temp"
+
+    id = Column(Integer, primary_key=True, index=True)
+    base_guia_id = Column(Integer, ForeignKey("base_guias.id", ondelete="CASCADE"), unique=True)
+    pei_semanal = Column(Float)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+class PatientPei(Base):
+    __tablename__ = "patient_pei"
+
+    id = Column(Integer, primary_key=True, index=True)
+    carteirinha_id = Column(Integer, ForeignKey("carteirinhas.id", ondelete="CASCADE"))
+    codigo_terapia = Column(Text)
+    
+    base_guia_id = Column(Integer, ForeignKey("base_guias.id", ondelete="CASCADE"))
+    
+    pei_semanal = Column(Float)
+    validade = Column(Date)
+    status = Column(Text) # Validated, Pendente
+    
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    carteirinha_rel = relationship("Carteirinha")
+
 
 class Log(Base):
     __tablename__ = "logs"
