@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from database import get_db
 from models import Job, Carteirinha, BaseGuia
-from sqlalchemy import func
+from sqlalchemy import func, case
 
 router = APIRouter(
     prefix="/dashboard",
@@ -11,14 +11,23 @@ router = APIRouter(
 
 @router.get("/stats")
 def get_dashboard_stats(db: Session = Depends(get_db)):
+    # Simple counts
     total_carteirinhas = db.query(Carteirinha).count()
     total_guias = db.query(BaseGuia).count()
-    total_jobs = db.query(Job).count()
     
-    # Job Status Counts
-    jobs_success = db.query(Job).filter(Job.status == 'success').count()
-    jobs_error = db.query(Job).filter(Job.status == 'error').count()
-    jobs_pending = db.query(Job).filter(Job.status.in_(['pending', 'processing'])).count()
+    # Aggregated Job stats
+    # Fetch total and status counts in one query
+    job_stats = db.query(
+        func.count(Job.id).label("total"),
+        func.sum(case((Job.status == 'success', 1), else_=0)).label("success"),
+        func.sum(case((Job.status == 'error', 1), else_=0)).label("error"),
+        func.sum(case((Job.status.in_(['pending', 'processing']), 1), else_=0)).label("pending")
+    ).first()
+
+    total_jobs = job_stats.total or 0
+    jobs_success = job_stats.success or 0
+    jobs_error = job_stats.error or 0
+    jobs_pending = job_stats.pending or 0
     
     return {
         "overview": {

@@ -3,6 +3,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from database import get_db
 from models import PatientPei, PeiTemp, BaseGuia, Carteirinha
+from services.pei_service import update_patient_pei
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import date, timedelta, datetime
@@ -103,18 +104,13 @@ def list_pei(
     vencimento_filter: Optional[str] = None, # vencidos, vence_d7, vence_d30
     db: Session = Depends(get_db)
 ):
-    query = db.query(PatientPei).join(Carteirinha)
+    query = db.query(PatientPei).join(Carteirinha).outerjoin(BaseGuia, PatientPei.base_guia_id == BaseGuia.id)
     query = apply_filters(query, search, status, validade_start, validade_end, vencimento_filter)
     
     total_items = query.count()
     
     # Pagination
     skip = (page - 1) * pageSize
-    # Sorting: Pendente first, then Updated At desc
-    # status is text: 'Pendente', 'Validado'
-    # We can use order_by with a case statement or just simple text sort if alphabetical works (P < V).
-    # 'Pendente' comes before 'Validado' alphabetically, so ASC status puts Pendente first.
-    # Then updated_at DESC.
     results = query.order_by(PatientPei.status.asc(), PatientPei.updated_at.desc()).offset(skip).limit(pageSize).all()
     
     data = []
@@ -129,6 +125,8 @@ def list_pei(
             "validade": row.validade,
             "status": row.status,
             "base_guia_id": row.base_guia_id,
+            "guia_vinculada": row.base_guia_rel.guia if row.base_guia_rel else "-",
+            "sessoes_autorizadas": row.base_guia_rel.sessoes_autorizadas if row.base_guia_rel else 0,
             "updated_at": row.updated_at
         })
 
@@ -148,7 +146,7 @@ def export_pei(
     vencimento_filter: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    query = db.query(PatientPei).join(Carteirinha)
+    query = db.query(PatientPei).join(Carteirinha).outerjoin(BaseGuia, PatientPei.base_guia_id == BaseGuia.id)
     query = apply_filters(query, search, status, validade_start, validade_end, vencimento_filter)
     
     try:
@@ -161,7 +159,8 @@ def export_pei(
         
         # Header
         ws.append([
-            "ID", "Paciente", "Carteirinha", "Código Terapia", 
+            "ID Paciente", "Paciente", "Carteirinha", "Código Terapia", 
+            "Guia Vinculada", "Data Autorização", "Senha", "Qtd Autorizada",
             "PEI Semanal", "Validade", "Status", "Atualizado Em"
         ])
         
@@ -170,12 +169,25 @@ def export_pei(
             updated_at_val = row.updated_at
             if updated_at_val and updated_at_val.tzinfo:
                 updated_at_val = updated_at_val.replace(tzinfo=None)
+            
+            # Base Guia Helpers
+            guia_num = row.base_guia_rel.guia if row.base_guia_rel else "-"
+            data_auth = row.base_guia_rel.data_autorizacao if row.base_guia_rel else None
+            senha = row.base_guia_rel.senha if row.base_guia_rel else "-"
+            qtd_aut = row.base_guia_rel.sessoes_autorizadas if row.base_guia_rel else 0
+            
+            # ID Paciente (from Carteirinha model field id_paciente, not database PK)
+            id_paciente_real = row.carteirinha_rel.id_paciente if row.carteirinha_rel else ""
 
             ws.append([
-                row.id,
+                id_paciente_real,
                 row.carteirinha_rel.paciente if row.carteirinha_rel else "",
                 row.carteirinha_rel.carteirinha if row.carteirinha_rel else "",
                 row.codigo_terapia,
+                guia_num,
+                data_auth,
+                senha,
+                qtd_aut,
                 row.pei_semanal,
                 row.validade,
                 row.status,
@@ -215,63 +227,19 @@ def override_pei(
         temp.pei_semanal = req.pei_semanal
     db.commit()
     
+
     # Recalculate
-    guia = db.query(BaseGuia).filter(BaseGuia.id == req.guia_id).first()
-    if not guia:
-        raise HTTPException(404, "Guia not found")
-        
-    update_patient_pei_backend(db, guia.carteirinha_id, guia.codigo_terapia)
+    # Actually, the trigger on PeiTemp (after_insert/update) should have already handled this 
+    # because we committed above.
+    # However, to be safe or if the commit happened before trigger fully propagated in some async scenarios (unlikely in sync sqlalchemy),
+    # we can explicitly call it or just rely on the commit.
+    # The event listener fires *after* flush/commit usually depending on config.
+    # But since we just committed, the 'after_update' for PeiTemp should have fired.
+    
+    # Just in case we want to return the updated status immediately:
+    # update_patient_pei(db, guia.carteirinha_id, guia.codigo_terapia)
+    
     return {"status": "success"}
 
-def update_patient_pei_backend(db: Session, carteirinha_id: int, codigo_terapia: str):
-    # Same logic as Worker
-    latest_guia = db.query(BaseGuia).filter(
-        BaseGuia.carteirinha_id == carteirinha_id,
-        BaseGuia.codigo_terapia == codigo_terapia
-    ).order_by(BaseGuia.data_autorizacao.desc(), BaseGuia.id.desc()).first()
+# Note: update_patient_pei_backend removed as it is now in services/pei_service.py
 
-    if not latest_guia:
-        return
-
-    override = db.query(PeiTemp).filter(PeiTemp.base_guia_id == latest_guia.id).first()
-    
-    status = "Pendente"
-    pei_semanal = 0.0
-    validade = None
-    
-    if latest_guia.data_autorizacao:
-        validade = latest_guia.data_autorizacao + timedelta(days=180)
-    
-    if override:
-        pei_semanal = float(override.pei_semanal)
-        status = "Validado" 
-    else:
-        if latest_guia.qtde_solicitada:
-             val = float(latest_guia.qtde_solicitada) / 16.0
-             pei_semanal = val
-             if val.is_integer():
-                 status = "Validado"
-             else:
-                 status = "Pendente"
-        else:
-            pei_semanal = 0.0
-            status = "Pendente"
-
-    patient_pei = db.query(PatientPei).filter(
-        PatientPei.carteirinha_id == carteirinha_id,
-        PatientPei.codigo_terapia == codigo_terapia
-    ).first()
-
-    if not patient_pei:
-        patient_pei = PatientPei(
-            carteirinha_id=carteirinha_id,
-            codigo_terapia=codigo_terapia
-        )
-        db.add(patient_pei)
-    
-    patient_pei.base_guia_id = latest_guia.id
-    patient_pei.pei_semanal = pei_semanal
-    patient_pei.validade = validade
-    patient_pei.status = status
-    
-    db.commit()

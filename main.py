@@ -22,6 +22,25 @@ app.add_middleware(
 def read_root():
     return {"message": "Base Guias Unimed API is running"}
 
+import asyncio
+from database import SessionLocal
+from services.cleanup_service import delete_expired_patients
+
+async def run_cleanup_loop():
+    while True:
+        try:
+            db = SessionLocal()
+            delete_expired_patients(db)
+            db.close()
+        except Exception as e:
+            print(f"Cleanup Loop Error: {e}")
+        
+        await asyncio.sleep(600) # Run every 10 minutes
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(run_cleanup_loop())
+
 # Include routers
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(carteirinhas.router)

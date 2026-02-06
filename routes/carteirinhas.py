@@ -159,18 +159,36 @@ async def upload_carteirinhas(
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 @router.get("/")
-def list_carteirinhas(skip: int = 0, limit: int = 100, search: Optional[str] = None, db: Session = Depends(get_db)):
+def list_carteirinhas(
+    skip: int = 0, 
+    limit: int = 100, 
+    search: Optional[str] = None, 
+    status: Optional[str] = None,
+    id_pagamento: Optional[str] = None,
+    paciente: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
     query = db.query(Carteirinha)
     
+    # Text Search (General)
     if search:
         search_filter = f"%{search}%"
-        # Filter by patient name OR carteirinha number OR IDs
         query = query.filter(
             (Carteirinha.paciente.ilike(search_filter)) | 
             (Carteirinha.carteirinha.ilike(search_filter)) |
             (Carteirinha.id_paciente.ilike(search_filter)) |
             (Carteirinha.id_pagamento.ilike(search_filter))
         )
+        
+    # Specific Filters
+    if status:
+        query = query.filter(Carteirinha.status == status)
+        
+    if id_pagamento:
+        query = query.filter(Carteirinha.id_pagamento.cast(String).ilike(f"%{id_pagamento}%"))
+        
+    if paciente:
+        query = query.filter(Carteirinha.paciente.ilike(f"%{paciente}%"))
     
     # Sort alphabetically by patient name
     query = query.order_by(Carteirinha.paciente.asc())

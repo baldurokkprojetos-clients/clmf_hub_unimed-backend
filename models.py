@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, Text, Float
+from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, Text, Float, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
@@ -25,6 +25,9 @@ class Carteirinha(Base):
     status = Column(Text, default="ativo")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    
+    is_temporary = Column(Boolean, default=False)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
 
     jobs = relationship("Job", back_populates="carteirinha_rel", cascade="all, delete-orphan")
     guias = relationship("BaseGuia", back_populates="carteirinha_rel", cascade="all, delete-orphan")
@@ -35,7 +38,7 @@ class Job(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     carteirinha_id = Column(Integer, ForeignKey("carteirinhas.id", ondelete="CASCADE"))
-    status = Column(Text, nullable=False, default="pending") # success, pending, processing, error
+    status = Column(Text, nullable=False, default="pending", index=True) # success, pending, processing, error
     attempts = Column(Integer, default=0)
     priority = Column(Integer, default=0)
     locked_by = Column(Text) # Server URL
@@ -88,6 +91,7 @@ class PatientPei(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     carteirinha_rel = relationship("Carteirinha")
+    base_guia_rel = relationship("BaseGuia")
 
 
 class Log(Base):
@@ -109,3 +113,13 @@ class Log(Base):
 # Actually I can't easily monkeypatch via replace inside the file text easily if I don't touch the classes.
 # I will rewrite the file segments for Job and Carteirinha to include 'logs = relationship(...)'
 
+
+# Event Listeners for Automatic PEI Calculation
+from sqlalchemy import event
+from sqlalchemy.orm import Session
+from services.pei_service import update_patient_pei
+
+
+
+
+# Event Listeners removed - Replaced by Database Triggers (migrations/0006)

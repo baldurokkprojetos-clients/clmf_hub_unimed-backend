@@ -25,8 +25,7 @@ def run_migrations():
                     print(f"Finished {file}")
                 except Exception as e:
                     print(f"Error executing {file}: {e}")
-                    # Don't break immediately, or do?
-                    # connection.rollback() is automatic on error context usually, but we are explicit.
+                    connection.rollback()
                     
     print("Migrations completed.")
 
