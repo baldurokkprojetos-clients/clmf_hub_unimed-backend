@@ -7,7 +7,7 @@ from services.pei_service import update_patient_pei
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import date, timedelta, datetime
-from sqlalchemy import func, or_, text, case, and_
+from sqlalchemy import func, or_, text
 import io
 import openpyxl
 
@@ -59,26 +59,38 @@ def apply_filters(query, search, status, validade_start, validade_end, venciment
 @router.get("/dashboard")
 def get_dashboard_stats(db: Session = Depends(get_db)):
     today = date.today()
-    d7_end = today + timedelta(days=7)
-    d30_end = today + timedelta(days=30)
     
-    # Aggregated query to reduce round-trips (1 query instead of 6)
-    stats = db.query(
-        func.count(PatientPei.id).label("total"),
-        func.sum(case((PatientPei.validade < today, 1), else_=0)).label("vencidos"),
-        func.sum(case((and_(PatientPei.validade >= today, PatientPei.validade <= d7_end), 1), else_=0)).label("vence_d7"),
-        func.sum(case((and_(PatientPei.validade >= today, PatientPei.validade <= d30_end), 1), else_=0)).label("vence_d30"),
-        func.sum(case((PatientPei.status == 'Pendente', 1), else_=0)).label("pendentes"),
-        func.sum(case((PatientPei.status == 'Validado', 1), else_=0)).label("validados")
-    ).first()
+    # Base query for active patients? Or just all?
+    # Stats: Vencidos, Vence D+7, Vence D+30
+    
+    # Vencidos
+    vencidos = db.query(func.count(PatientPei.id)).filter(PatientPei.validade < today).scalar()
+    
+    # Vence D+7
+    d7_end = today + timedelta(days=7)
+    vence_d7 = db.query(func.count(PatientPei.id)).filter(
+        PatientPei.validade >= today, 
+        PatientPei.validade <= d7_end
+    ).scalar()
+    
+    # Vence D+30
+    d30_end = today + timedelta(days=30)
+    vence_d30 = db.query(func.count(PatientPei.id)).filter(
+        PatientPei.validade >= today, 
+        PatientPei.validade <= d30_end
+    ).scalar()
+    
+    total = db.query(func.count(PatientPei.id)).scalar()
+    pendentes = db.query(func.count(PatientPei.id)).filter(PatientPei.status == 'Pendente').scalar()
+    validados = db.query(func.count(PatientPei.id)).filter(PatientPei.status == 'Validado').scalar()
 
     return {
-        "total": stats.total or 0,
-        "vencidos": stats.vencidos or 0,
-        "vence_d7": stats.vence_d7 or 0,
-        "vence_d30": stats.vence_d30 or 0,
-        "pendentes": stats.pendentes or 0,
-        "validados": stats.validados or 0
+        "total": total,
+        "vencidos": vencidos or 0,
+        "vence_d7": vence_d7 or 0,
+        "vence_d30": vence_d30 or 0,
+        "pendentes": pendentes or 0,
+        "validados": validados or 0
     }
 
 @router.get("/")
@@ -92,7 +104,24 @@ def list_pei(
     vencimento_filter: Optional[str] = None, # vencidos, vence_d7, vence_d30
     db: Session = Depends(get_db)
 ):
-    query = db.query(PatientPei).join(Carteirinha).outerjoin(BaseGuia, PatientPei.base_guia_id == BaseGuia.id)
+    # Optimized query selecting only necessary columns
+    query = db.query(
+        PatientPei.id,
+        PatientPei.carteirinha_id,
+        Carteirinha.carteirinha,
+        Carteirinha.paciente,
+        PatientPei.codigo_terapia,
+        PatientPei.pei_semanal,
+        PatientPei.validade,
+        PatientPei.status,
+        PatientPei.base_guia_id,
+        BaseGuia.guia.label("guia_vinculada"),
+        BaseGuia.sessoes_autorizadas,
+        PatientPei.updated_at,
+        Carteirinha.id_paciente # For export matching if needed
+    ).join(Carteirinha, PatientPei.carteirinha_id == Carteirinha.id)\
+     .outerjoin(BaseGuia, PatientPei.base_guia_id == BaseGuia.id)
+    
     query = apply_filters(query, search, status, validade_start, validade_end, vencimento_filter)
     
     total_items = query.count()
@@ -106,15 +135,15 @@ def list_pei(
         data.append({
             "id": row.id,
             "carteirinha_id": row.carteirinha_id,
-            "carteirinha": row.carteirinha_rel.carteirinha if row.carteirinha_rel else "",
-            "paciente": row.carteirinha_rel.paciente if row.carteirinha_rel else "",
+            "carteirinha": row.carteirinha or "",
+            "paciente": row.paciente or "",
             "codigo_terapia": row.codigo_terapia,
             "pei_semanal": row.pei_semanal,
             "validade": row.validade,
             "status": row.status,
             "base_guia_id": row.base_guia_id,
-            "guia_vinculada": row.base_guia_rel.guia if row.base_guia_rel else "-",
-            "sessoes_autorizadas": row.base_guia_rel.sessoes_autorizadas if row.base_guia_rel else 0,
+            "guia_vinculada": row.guia_vinculada or "-",
+            "sessoes_autorizadas": row.sessoes_autorizadas or 0,
             "updated_at": row.updated_at
         })
 
