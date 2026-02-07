@@ -26,7 +26,12 @@ if not SQLALCHEMY_DATABASE_URL:
 # Note: For Supabase transaction pooler (port 6543), we might need to disable statement cache working with sqlalchemy
 # engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True)
 
-engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True)
+# Disable prepared statements for Supabase Transaction Pooler (port 6543) support
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL, 
+    pool_pre_ping=True,
+    connect_args={"prepare_threshold": None} 
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()

@@ -43,15 +43,18 @@ CREATE TABLE IF NOT EXISTS base_guias (
     validade DATE,
     codigo_terapia TEXT,
     nome_terapia TEXT,
+    qtde_solicitada INTEGER,
     sessoes_autorizadas INTEGER,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- Index for faster queries
-CREATE INDEX idx_jobs_status ON jobs(status);
-CREATE INDEX idx_jobs_locked_by ON jobs(locked_by);
-CREATE INDEX idx_base_guias_carteirinha ON base_guias(carteirinha_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+CREATE INDEX IF NOT EXISTS idx_jobs_locked_by ON jobs(locked_by);
+CREATE INDEX IF NOT EXISTS idx_base_guias_carteirinha ON base_guias(carteirinha_id);
+
+
 
 
 -- MIGRATION: 0002_seed_data.sql --
@@ -76,10 +79,19 @@ VALUES (
 -- Date: 2026-01-10
 
 -- Add new columns
-ALTER TABLE carteirinhas 
-ADD COLUMN IF NOT EXISTS id_paciente TEXT,
-ADD COLUMN IF NOT EXISTS id_pagamento TEXT,
-ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ativo';
+-- Add new columns safely
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='carteirinhas' AND column_name='id_paciente') THEN
+        ALTER TABLE carteirinhas ADD COLUMN id_paciente TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='carteirinhas' AND column_name='id_pagamento') THEN
+        ALTER TABLE carteirinhas ADD COLUMN id_pagamento TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='carteirinhas' AND column_name='status') THEN
+        ALTER TABLE carteirinhas ADD COLUMN status TEXT DEFAULT 'ativo';
+    END IF;
+END $$;
 
 -- Update existing records to have default status
 UPDATE carteirinhas 
@@ -108,11 +120,19 @@ DROP INDEX IF EXISTS idx_carteirinhas_id_pagamento;
 
 -- Change column types to INTEGER
 -- Use USING clause to convert text to integer
-ALTER TABLE carteirinhas 
-ALTER COLUMN id_paciente TYPE INTEGER USING id_paciente::INTEGER;
-
-ALTER TABLE carteirinhas 
-ALTER COLUMN id_pagamento TYPE INTEGER USING id_pagamento::INTEGER;
+-- Change column types to INTEGER safely
+DO $$
+BEGIN
+    -- Check if id_paciente is not integer (e.g. text) before altering
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='carteirinhas' AND column_name='id_paciente' AND data_type='text') THEN
+        ALTER TABLE carteirinhas ALTER COLUMN id_paciente TYPE INTEGER USING id_paciente::INTEGER;
+    END IF;
+    
+    -- Check if id_pagamento is not integer
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='carteirinhas' AND column_name='id_pagamento' AND data_type='text') THEN
+        ALTER TABLE carteirinhas ALTER COLUMN id_pagamento TYPE INTEGER USING id_pagamento::INTEGER;
+    END IF;
+END $$;
 
 -- Recreate indexes
 CREATE INDEX idx_carteirinhas_id_paciente 
@@ -270,12 +290,19 @@ EXECUTE FUNCTION calculate_patient_pei();
 -- MIGRATION: 0007_add_temp_patient_fields.sql --
 
 -- Add temporary patient fields
-ALTER TABLE carteirinhas
-ADD COLUMN is_temporary BOOLEAN DEFAULT FALSE,
-ADD COLUMN expires_at TIMESTAMP WITH TIME ZONE;
+-- Add temporary patient fields safely
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='carteirinhas' AND column_name='is_temporary') THEN
+        ALTER TABLE carteirinhas ADD COLUMN is_temporary BOOLEAN DEFAULT FALSE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='carteirinhas' AND column_name='expires_at') THEN
+        ALTER TABLE carteirinhas ADD COLUMN expires_at TIMESTAMP WITH TIME ZONE;
+    END IF;
+END $$;
 
 -- Index for faster cleanup queries
-CREATE INDEX idx_carteirinhas_temp_expiry ON carteirinhas(is_temporary, expires_at);
+CREATE INDEX IF NOT EXISTS idx_carteirinhas_temp_expiry ON carteirinhas(is_temporary, expires_at);
 
 
 -- MIGRATION: 0008_add_index_job_status.sql --

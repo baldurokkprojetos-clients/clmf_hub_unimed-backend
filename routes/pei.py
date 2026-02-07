@@ -7,7 +7,7 @@ from services.pei_service import update_patient_pei
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import date, timedelta, datetime
-from sqlalchemy import func, or_, text
+from sqlalchemy import func, or_, text, case, and_
 import io
 import openpyxl
 
@@ -59,38 +59,26 @@ def apply_filters(query, search, status, validade_start, validade_end, venciment
 @router.get("/dashboard")
 def get_dashboard_stats(db: Session = Depends(get_db)):
     today = date.today()
-    
-    # Base query for active patients? Or just all?
-    # Stats: Vencidos, Vence D+7, Vence D+30
-    
-    # Vencidos
-    vencidos = db.query(func.count(PatientPei.id)).filter(PatientPei.validade < today).scalar()
-    
-    # Vence D+7
     d7_end = today + timedelta(days=7)
-    vence_d7 = db.query(func.count(PatientPei.id)).filter(
-        PatientPei.validade >= today, 
-        PatientPei.validade <= d7_end
-    ).scalar()
-    
-    # Vence D+30
     d30_end = today + timedelta(days=30)
-    vence_d30 = db.query(func.count(PatientPei.id)).filter(
-        PatientPei.validade >= today, 
-        PatientPei.validade <= d30_end
-    ).scalar()
     
-    total = db.query(func.count(PatientPei.id)).scalar()
-    pendentes = db.query(func.count(PatientPei.id)).filter(PatientPei.status == 'Pendente').scalar()
-    validados = db.query(func.count(PatientPei.id)).filter(PatientPei.status == 'Validado').scalar()
+    # Aggregated query to reduce round-trips (1 query instead of 6)
+    stats = db.query(
+        func.count(PatientPei.id).label("total"),
+        func.sum(case((PatientPei.validade < today, 1), else_=0)).label("vencidos"),
+        func.sum(case((and_(PatientPei.validade >= today, PatientPei.validade <= d7_end), 1), else_=0)).label("vence_d7"),
+        func.sum(case((and_(PatientPei.validade >= today, PatientPei.validade <= d30_end), 1), else_=0)).label("vence_d30"),
+        func.sum(case((PatientPei.status == 'Pendente', 1), else_=0)).label("pendentes"),
+        func.sum(case((PatientPei.status == 'Validado', 1), else_=0)).label("validados")
+    ).first()
 
     return {
-        "total": total,
-        "vencidos": vencidos or 0,
-        "vence_d7": vence_d7 or 0,
-        "vence_d30": vence_d30 or 0,
-        "pendentes": pendentes or 0,
-        "validados": validados or 0
+        "total": stats.total or 0,
+        "vencidos": stats.vencidos or 0,
+        "vence_d7": stats.vence_d7 or 0,
+        "vence_d30": stats.vence_d30 or 0,
+        "pendentes": stats.pendentes or 0,
+        "validados": stats.validados or 0
     }
 
 @router.get("/")
