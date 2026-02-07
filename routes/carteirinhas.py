@@ -6,6 +6,7 @@ from typing import List, Optional
 import io
 from openpyxl import load_workbook
 from sqlalchemy import or_, String, cast
+import pandas as pd
 
 router = APIRouter(
     prefix="/carteirinhas",
