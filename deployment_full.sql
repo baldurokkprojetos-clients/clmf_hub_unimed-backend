@@ -311,3 +311,50 @@ CREATE INDEX IF NOT EXISTS idx_carteirinhas_temp_expiry ON carteirinhas(is_tempo
 -- Description: Improve performance of dashboard stats queries by indexing the status column.
 
 CREATE INDEX IF NOT EXISTS ix_jobs_status ON jobs (status);
+-- Migration: Add qtde_solicitada to base_guias
+-- Description: Adds the missing qtde_solicitada column required for PEI calculation.
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='base_guias' AND column_name='qtde_solicitada') THEN
+        ALTER TABLE base_guias ADD COLUMN qtde_solicitada INTEGER;
+    END IF;
+END $$;
+-- Migration: Add Performance Indexes
+-- Description: Adds missing indexes for PEI dashboard and filtering to improve query performance.
+
+-- 1. Index for Dashboard counts and List filtering (Status)
+CREATE INDEX IF NOT EXISTS idx_patient_pei_status ON patient_pei(status);
+
+-- 2. Index for Dashboard counts and Date filtering (Validade)
+CREATE INDEX IF NOT EXISTS idx_patient_pei_validade ON patient_pei(validade);
+
+-- 3. Index for Join performance (Base Guia FK)
+CREATE INDEX IF NOT EXISTS idx_patient_pei_base_guia ON patient_pei(base_guia_id);
+
+-- 4. Index for Sorting (Updated At)
+CREATE INDEX IF NOT EXISTS idx_patient_pei_updated_at ON patient_pei(updated_at);
+-- Migration: SaaS Performance Indexes
+-- Description: Standardizes all performance indexes for SaaS deployment consistency.
+
+-- Users
+CREATE INDEX IF NOT EXISTS idx_users_api_key ON users(api_key);
+
+-- Carteirinhas
+CREATE INDEX IF NOT EXISTS idx_carteirinhas_paciente ON carteirinhas(paciente);
+CREATE INDEX IF NOT EXISTS idx_carteirinhas_carteirinha ON carteirinhas(carteirinha);
+CREATE INDEX IF NOT EXISTS idx_carteirinhas_id_pagamento ON carteirinhas(id_pagamento);
+CREATE INDEX IF NOT EXISTS idx_carteirinhas_id_paciente ON carteirinhas(id_paciente);
+
+-- Base Guias
+CREATE INDEX IF NOT EXISTS idx_base_guias_carteirinha ON base_guias(carteirinha_id);
+
+-- Patient PEI
+CREATE INDEX IF NOT EXISTS idx_patient_pei_carteirinha ON patient_pei(carteirinha_id);
+CREATE INDEX IF NOT EXISTS idx_patient_pei_base_guia ON patient_pei(base_guia_id);
+CREATE INDEX IF NOT EXISTS idx_patient_pei_status ON patient_pei(status);
+CREATE INDEX IF NOT EXISTS idx_patient_pei_validade ON patient_pei(validade);
+CREATE INDEX IF NOT EXISTS idx_patient_pei_updated_at ON patient_pei(updated_at);
+
+-- Jobs
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
