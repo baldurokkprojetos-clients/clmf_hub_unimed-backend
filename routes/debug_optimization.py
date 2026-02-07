@@ -30,7 +30,8 @@ def force_db_indexes(db: Session = Depends(get_db)):
         ("idx_base_guias_carteirinha", "base_guias", "carteirinha_id"),
         ("ix_jobs_status", "jobs", "status"),
         ("idx_carteirinhas_paciente", "carteirinhas", "paciente"),
-        ("idx_carteirinhas_carteirinha", "carteirinhas", "carteirinha")
+        ("idx_carteirinhas_carteirinha", "carteirinhas", "carteirinha"),
+        ("idx_users_api_key_manual", "users", "api_key")
     ]
 
     try:
