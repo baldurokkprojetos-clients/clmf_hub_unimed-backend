@@ -62,10 +62,10 @@ async def upload_carteirinhas(
         
         # 1. Parse File into List of Dicts
         if file.filename.endswith('.csv'):
-            # Try decoding with utf-8 then latin1
+            # Try decoding with utf-8-sig (handles BOM) then latin1
             text_content = ""
             try:
-                text_content = contents.decode('utf-8')
+                text_content = contents.decode('utf-8-sig')
             except UnicodeDecodeError:
                 text_content = contents.decode('latin1')
             
