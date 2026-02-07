@@ -10,7 +10,8 @@ router = APIRouter(
 
 @router.get("/")
 def list_logs(
-    limit: int = 100, 
+    skip: int = 0,
+    limit: int = 50, 
     level: Optional[str] = None, 
     job_id: Optional[int] = None,
     db: Session = Depends(get_db)
@@ -21,13 +22,14 @@ def list_logs(
         query = query.filter(Log.level == level)
     if job_id:
         query = query.filter(Log.job_id == job_id)
-        
-    logs = query.order_by(Log.created_at.desc()).limit(limit).all()
+    
+    total = query.count()
+    logs = query.order_by(Log.created_at.desc()).offset(skip).limit(limit).all()
     
     # Return enriched data
-    result = []
+    data = []
     for log in logs:
-        result.append({
+        data.append({
             "id": log.id,
             "level": log.level,
             "message": log.message,
@@ -37,4 +39,9 @@ def list_logs(
             "paciente": log.carteirinha_rel.paciente if log.carteirinha_rel else None
         })
         
-    return result
+    return {
+        "data": data,
+        "total": total,
+        "skip": skip,
+        "limit": limit
+    }

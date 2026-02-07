@@ -5,6 +5,7 @@ from models import Carteirinha, Job, BaseGuia
 from typing import List, Optional
 import io
 from openpyxl import load_workbook
+from sqlalchemy import or_, String, cast
 
 router = APIRouter(
     prefix="/carteirinhas",
@@ -173,11 +174,14 @@ def list_carteirinhas(
     # Text Search (General)
     if search:
         search_filter = f"%{search}%"
+        # Cast integer columns to string for LIKE search
         query = query.filter(
-            (Carteirinha.paciente.ilike(search_filter)) | 
-            (Carteirinha.carteirinha.ilike(search_filter)) |
-            (Carteirinha.id_paciente.ilike(search_filter)) |
-            (Carteirinha.id_pagamento.ilike(search_filter))
+            or_(
+                Carteirinha.paciente.ilike(search_filter), 
+                Carteirinha.carteirinha.ilike(search_filter),
+                Carteirinha.id_paciente.cast(String).ilike(search_filter),
+                Carteirinha.id_pagamento.cast(String).ilike(search_filter)
+            )
         )
         
     # Specific Filters
@@ -185,6 +189,10 @@ def list_carteirinhas(
         query = query.filter(Carteirinha.status == status)
         
     if id_pagamento:
+        # Flexible handling: exact match if int, or partial if treating as string?
+        # User asked for "Geral, ID Pagamento" filters not working.
+        # Usually ID filter is exact, but let's allow partial for usability or exact if number.
+        # Let's use cast for safety.
         query = query.filter(Carteirinha.id_pagamento.cast(String).ilike(f"%{id_pagamento}%"))
         
     if paciente:
