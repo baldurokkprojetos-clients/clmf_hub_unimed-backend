@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Body
 from sqlalchemy.orm import Session
 from database import get_db
-from models import Carteirinha, Job, BaseGuia
+from models import Carteirinha, Job, BaseGuia, User
 from typing import List, Optional
 import io
 import csv
 from openpyxl import load_workbook
 from sqlalchemy import or_, String, cast
+from dependencies import get_current_user
 
 router = APIRouter(
     prefix="/carteirinhas",
@@ -49,7 +50,8 @@ def normalize_header(header):
 async def upload_carteirinhas(
     file: UploadFile = File(...),
     overwrite: bool = Form(False),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     try:
         contents = await file.read()
@@ -125,9 +127,16 @@ async def upload_carteirinhas(
         errors = []
         
         # Check required columns
-        # We check first row keys if exists
-        if rows and 'Carteirinha' not in rows[0].keys():
-             pass 
+        # We check first row keys if exists, or just ensure process fails loosely?
+        # IMPORTANT: 'Carteirinha' is mandatory.
+        # If headers are bad, keys won't match.
+        if rows:
+             first_row_keys = rows[0].keys()
+             if 'Carteirinha' not in first_row_keys:
+                  raise HTTPException(status_code=400, detail=f"Arquivo inválido. Coluna 'Carteirinha' não encontrada. Colunas encontradas: {list(first_row_keys)}")
+        else:
+             # Empty file logic
+             pass # Will produce 0 added
 
         for index, row in enumerate(rows):
             cart_raw = row.get('Carteirinha')
@@ -171,6 +180,13 @@ async def upload_carteirinhas(
         if errors:
             raise HTTPException(status_code=400, detail="Erros de validação encontrados:\n" + "\n".join(errors[:10]) + ("..." if len(errors) > 10 else ""))
 
+        # Only overwrite if we actually have valid data to insert, or if overwrite is explicit request even with empty?
+        # User said: "Frontend shows success but data is not in DB".
+        # If we have 0 carteirinhas_data, we should probable NOT delete everything if overwrite is True, unless that's intended.
+        # But usually a CSV with headers only implies empty the list?
+        # Let's be safe: if overwrite is true, only delete if we parsed something? No, user might want to clear.
+        # ISSUE: If overwrite is True and parser fails to find 'Carteirinha' column (caught above now), it raises 400, so no delete. Good.
+        
         if overwrite:
             db.query(Carteirinha).delete()
             db.commit()
@@ -183,6 +199,11 @@ async def upload_carteirinhas(
             existing = db.query(Carteirinha).filter(Carteirinha.carteirinha == item['carteirinha']).first()
             if existing:
                 if overwrite:
+                    # Should not match if we deleted, unless dups in file
+                    # Actually if we deleted, existing should be None?
+                    # Unless we are in same transaction...
+                    # We committed delete above. So existing should be None.
+                    # Unless duplicate lines in CSV.
                     count_skipped += 1
                 else:
                     count_skipped += 1
@@ -221,7 +242,8 @@ def list_carteirinhas(
     status: Optional[str] = None,
     id_pagamento: Optional[str] = None,
     paciente: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     query = db.query(Carteirinha)
     
@@ -243,10 +265,6 @@ def list_carteirinhas(
         query = query.filter(Carteirinha.status == status)
         
     if id_pagamento:
-        # Flexible handling: exact match if int, or partial if treating as string?
-        # User asked for "Geral, ID Pagamento" filters not working.
-        # Usually ID filter is exact, but let's allow partial for usability or exact if number.
-        # Let's use cast for safety.
         query = query.filter(Carteirinha.id_pagamento.cast(String).ilike(f"%{id_pagamento}%"))
         
     if paciente:
@@ -266,7 +284,7 @@ def list_carteirinhas(
     }
 
 @router.post("/")
-def create_carteirinha(item: dict = Body(...), db: Session = Depends(get_db)):
+def create_carteirinha(item: dict = Body(...), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """Create a new carteirinha"""
     if 'carteirinha' not in item:
         raise HTTPException(status_code=400, detail="Field 'carteirinha' is required")
@@ -294,7 +312,7 @@ def create_carteirinha(item: dict = Body(...), db: Session = Depends(get_db)):
     return new_cart
 
 @router.put("/{carteirinha_id}")
-def update_carteirinha(carteirinha_id: int, item: dict = Body(...), db: Session = Depends(get_db)):
+def update_carteirinha(carteirinha_id: int, item: dict = Body(...), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     cart = db.query(Carteirinha).filter(Carteirinha.id == carteirinha_id).first()
     if not cart:
         raise HTTPException(status_code=404, detail="Carteirinha not found")
@@ -316,7 +334,7 @@ def update_carteirinha(carteirinha_id: int, item: dict = Body(...), db: Session 
     return cart
 
 @router.delete("/{carteirinha_id}")
-def delete_carteirinha(carteirinha_id: int, db: Session = Depends(get_db)):
+def delete_carteirinha(carteirinha_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     cart = db.query(Carteirinha).filter(Carteirinha.id == carteirinha_id).first()
     if not cart:
         raise HTTPException(status_code=404, detail="Carteirinha not found")
