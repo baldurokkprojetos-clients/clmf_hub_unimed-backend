@@ -42,7 +42,10 @@ def normalize_header(header):
         'id_paciente': 'IdPaciente',
         'IdPagamento': 'IdPagamento',
         'id_pagamento': 'IdPagamento',
-        'IDPAGAMENTO': 'IdPagamento'
+        'IDPAGAMENTO': 'IdPagamento',
+        'status': 'status',
+        'Status': 'status',
+        'STATUS': 'status'
     }
     return mapping.get(header, header)
 
@@ -127,16 +130,13 @@ async def upload_carteirinhas(
         errors = []
         
         # Check required columns
-        # We check first row keys if exists, or just ensure process fails loosely?
-        # IMPORTANT: 'Carteirinha' is mandatory.
-        # If headers are bad, keys won't match.
         if rows:
              first_row_keys = rows[0].keys()
              if 'Carteirinha' not in first_row_keys:
                   raise HTTPException(status_code=400, detail=f"Arquivo inválido. Coluna 'Carteirinha' não encontrada. Colunas encontradas: {list(first_row_keys)}")
         else:
              # Empty file logic
-             pass # Will produce 0 added
+             pass 
 
         for index, row in enumerate(rows):
             cart_raw = row.get('Carteirinha')
@@ -165,6 +165,10 @@ async def upload_carteirinhas(
                 except (ValueError, TypeError):
                     pass
             
+            status_val = row.get('status', 'ativo')
+            if not status_val or str(status_val).lower() == 'nan':
+                status_val = 'ativo'
+
             if cart and cart.lower() != 'nan' and cart.lower() != 'none':
                 try:
                     validate_carteirinha_format(cart)
@@ -172,7 +176,8 @@ async def upload_carteirinhas(
                         "carteirinha": cart,
                         "paciente": paciente,
                         "id_paciente": id_paciente,
-                        "id_pagamento": id_pagamento
+                        "id_pagamento": id_pagamento,
+                        "status": status_val
                     })
                 except HTTPException as e:
                     errors.append(f"Linha {index+2}: {e.detail}")
@@ -180,40 +185,44 @@ async def upload_carteirinhas(
         if errors:
             raise HTTPException(status_code=400, detail="Erros de validação encontrados:\n" + "\n".join(errors[:10]) + ("..." if len(errors) > 10 else ""))
 
-        # Only overwrite if we actually have valid data to insert, or if overwrite is explicit request even with empty?
-        # User said: "Frontend shows success but data is not in DB".
-        # If we have 0 carteirinhas_data, we should probable NOT delete everything if overwrite is True, unless that's intended.
-        # But usually a CSV with headers only implies empty the list?
-        # Let's be safe: if overwrite is true, only delete if we parsed something? No, user might want to clear.
-        # ISSUE: If overwrite is True and parser fails to find 'Carteirinha' column (caught above now), it raises 400, so no delete. Good.
-        
-        if overwrite:
-            db.query(Carteirinha).delete()
-            db.commit()
-
-
         count_added = 0
-        count_skipped = 0
+        count_updated = 0
         
         for item in carteirinhas_data:
             existing = db.query(Carteirinha).filter(Carteirinha.carteirinha == item['carteirinha']).first()
             if existing:
-                if overwrite:
-                    # Should not match if we deleted, unless dups in file
-                    # Actually if we deleted, existing should be None?
-                    # Unless we are in same transaction...
-                    # We committed delete above. So existing should be None.
-                    # Unless duplicate lines in CSV.
-                    count_skipped += 1
-                else:
-                    count_skipped += 1
+                # Update existing record
+                changed = False
+                if existing.paciente != item['paciente']:
+                    existing.paciente = item['paciente']
+                    changed = True
+                if existing.id_paciente != item['id_paciente']:
+                    existing.id_paciente = item['id_paciente']
+                    changed = True
+                if existing.id_pagamento != item['id_pagamento']:
+                   existing.id_pagamento = item['id_pagamento']
+                   changed = True
+                
+                # Update status if provided in CSV (it defaults to 'ativo' in parsing if missing, 
+                # but if CSV has a column 'status', we want to use it).
+                # The parsing logic above sets 'status' to 'ativo' if missing/nan.
+                # So we effectively overwrite status with CSV or 'ativo'. 
+                # If we want to PRESERVE existing status if CSV is empty, we need to change parsing logic.
+                # User requirement: "ignore ou apenas atualize se tive algo diferente, staus, id,.."
+                # Assuming CSV is the source of truth for status too.
+                if existing.status != item['status']:
+                    existing.status = item['status']
+                    changed = True
+                
+                if changed:
+                    count_updated += 1
             else:
                  new_cart = Carteirinha(
                      carteirinha=item['carteirinha'],
                      paciente=item['paciente'],
                      id_paciente=item.get('id_paciente'),
                      id_pagamento=item.get('id_pagamento'),
-                     status='ativo'
+                     status=item.get('status', 'ativo')
                  )
                  db.add(new_cart)
                  count_added += 1
@@ -221,10 +230,10 @@ async def upload_carteirinhas(
         db.commit()
         
         return {
-            "message": "Upload proccessed",
+            "message": "Upload processed successfully",
             "added": count_added,
-            "skipped": count_skipped,
-            "overwrite": overwrite
+            "updated": count_updated,
+            "total_processed": len(carteirinhas_data)
         }
 
     except HTTPException:
