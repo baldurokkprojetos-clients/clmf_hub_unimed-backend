@@ -4,9 +4,9 @@ from database import get_db
 from models import Carteirinha, Job, BaseGuia
 from typing import List, Optional
 import io
+import csv
 from openpyxl import load_workbook
 from sqlalchemy import or_, String, cast
-import pandas as pd
 
 router = APIRouter(
     prefix="/carteirinhas",
@@ -25,6 +25,26 @@ def validate_carteirinha_format(code: str):
     if code[4] != '.' or code[9] != '.' or code[16] != '.' or code[19] != '-':
         raise HTTPException(status_code=400, detail=f"Carteirinha inválida: {code}. Formato incorreto de pontos e traços. Esperado: 0000.0000.000000.00-0")
 
+def normalize_header(header):
+    header = str(header).strip()
+    mapping = {
+        'carteiras': 'Carteirinha',
+        'Carteiras': 'Carteirinha',
+        'carteirinha': 'Carteirinha',
+        'Carteirinha': 'Carteirinha',
+        'PACIENTE': 'Paciente',
+        'paciente': 'Paciente',
+        'Paciente': 'Paciente',
+        'ID': 'IdPaciente',
+        'id': 'IdPaciente',
+        'IdPaciente': 'IdPaciente',
+        'id_paciente': 'IdPaciente',
+        'IdPagamento': 'IdPagamento',
+        'id_pagamento': 'IdPagamento',
+        'IDPAGAMENTO': 'IdPagamento'
+    }
+    return mapping.get(header, header)
+
 @router.post("/upload")
 async def upload_carteirinhas(
     file: UploadFile = File(...),
@@ -33,76 +53,110 @@ async def upload_carteirinhas(
 ):
     try:
         contents = await file.read()
+        rows = []
         
-        # Determine file type
+        # 1. Parse File into List of Dicts
         if file.filename.endswith('.csv'):
-            # ... csv reading logic ...
+            # Try decoding with utf-8 then latin1
+            text_content = ""
             try:
-                df = pd.read_csv(io.BytesIO(contents), encoding='utf-8', sep=';') 
-                if len(df.columns) <= 1:
-                     io.BytesIO(contents).seek(0)
-                     df = pd.read_csv(io.BytesIO(contents), encoding='utf-8', sep=',')
+                text_content = contents.decode('utf-8')
             except UnicodeDecodeError:
-                io.BytesIO(contents).seek(0)
-                df = pd.read_csv(io.BytesIO(contents), encoding='latin1', sep=';')
+                text_content = contents.decode('latin1')
+            
+            # Detect separator
+            dialect = 'excel' # default comma
+            if ';' in text_content and text_content.count(';') > text_content.count(','):
+                class SemiColonDialect(csv.Dialect):
+                    delimiter = ';'
+                    quotechar = '"'
+                    doublequote = True
+                    skipinitialspace = False
+                    lineterminator = '\r\n'
+                    quoting = csv.QUOTE_MINIMAL
+                dialect = SemiColonDialect
+            
+            f = io.StringIO(text_content)
+            reader = csv.DictReader(f, dialect=dialect)
+            
+            # Normalize Headers
+            # DictReader uses fieldnames from first row. We need to remap them.
+            if reader.fieldnames:
+                original_headers = reader.fieldnames
+                normalized_fieldnames = [normalize_header(h) for h in original_headers]
+                reader.fieldnames = normalized_fieldnames # Override fieldnames
+            
+            for row in reader:
+                rows.append(row)
+                
         else:
-             # Explicitly use openpyxl engine for .xlsx
-             df = pd.read_excel(io.BytesIO(contents), engine='openpyxl')
-        
-        # Normalize columns (uppercase/lowercase issues handling)
-        # Create a dict of normalized -> original
-        df.columns = df.columns.astype(str).str.strip()
-        
-        column_mapping = {
-            'carteiras': 'Carteirinha',
-            'Carteiras': 'Carteirinha',
-            'carteirinha': 'Carteirinha',
-            'Carteirinha': 'Carteirinha',
-            'PACIENTE': 'Paciente',
-            'paciente': 'Paciente',
-            'Paciente': 'Paciente',
-            'ID': 'IdPaciente',
-            'id': 'IdPaciente',
-            'IdPaciente': 'IdPaciente',
-            'id_paciente': 'IdPaciente',
-            'IdPagamento': 'IdPagamento',
-            'id_pagamento': 'IdPagamento',
-            'IDPAGAMENTO': 'IdPagamento'
-        }
-        
-        df.rename(columns=column_mapping, inplace=True)
-        
-        if 'Carteirinha' not in df.columns:
-             raise HTTPException(status_code=400, detail=f"Excel/CSV must contain 'Carteirinha' or 'carteiras' column. Found: {list(df.columns)}")
+            # Excel (.xlsx)
+            wb = load_workbook(filename=io.BytesIO(contents), read_only=True, data_only=True)
+            ws = wb.active
+            
+            header_map = {} # col_index -> normalized_name
+            is_header = True
+            
+            for row in ws.iter_rows(values_only=True):
+                if not row: continue
+                
+                # Check for empty row
+                if all(cell is None for cell in row): continue
 
+                if is_header:
+                    for i, cell_value in enumerate(row):
+                        if cell_value:
+                            header_map[i] = normalize_header(cell_value)
+                    is_header = False
+                    continue
+                
+                # Data Row
+                row_data = {}
+                for i, cell_value in enumerate(row):
+                    if i in header_map:
+                        row_data[header_map[i]] = cell_value
+                
+                rows.append(row_data)
+            
+            wb.close()
+        
+        # 2. Process Rows
         carteirinhas_data = []
         errors = []
         
-        for index, row in df.iterrows():
-            cart = str(row['Carteirinha']).strip()
-            paciente = str(row.get('Paciente', '')).strip()
+        # Check required columns
+        # We check first row keys if exists
+        if rows and 'Carteirinha' not in rows[0].keys():
+             pass 
+
+        for index, row in enumerate(rows):
+            cart_raw = row.get('Carteirinha')
+            cart = str(cart_raw).strip() if cart_raw is not None else ""
+            
+            paciente_raw = row.get('Paciente')
+            paciente = str(paciente_raw).strip() if paciente_raw is not None else ""
             
             # Convert IDs to integers
             id_paciente = None
             id_pagamento = None
             
-            if 'IdPaciente' in row:
+            if 'IdPaciente' in row and row['IdPaciente']:
                 try:
                     val = str(row['IdPaciente']).strip()
-                    if val and val.lower() != 'nan':
-                        id_paciente = int(float(val))  # float first to handle "123.0"
+                    if val and val.lower() != 'nan' and val.lower() != 'none':
+                        id_paciente = int(float(val))
                 except (ValueError, TypeError):
                     pass
             
-            if 'IdPagamento' in row:
+            if 'IdPagamento' in row and row['IdPagamento']:
                 try:
                     val = str(row['IdPagamento']).strip()
-                    if val and val.lower() != 'nan':
+                    if val and val.lower() != 'nan' and val.lower() != 'none':
                         id_pagamento = int(float(val))
                 except (ValueError, TypeError):
                     pass
             
-            if cart and cart.lower() != 'nan':
+            if cart and cart.lower() != 'nan' and cart.lower() != 'none':
                 try:
                     validate_carteirinha_format(cart)
                     carteirinhas_data.append({
@@ -129,7 +183,6 @@ async def upload_carteirinhas(
             existing = db.query(Carteirinha).filter(Carteirinha.carteirinha == item['carteirinha']).first()
             if existing:
                 if overwrite:
-                    # Should not match if we deleted, unless dups in file
                     count_skipped += 1
                 else:
                     count_skipped += 1
@@ -157,7 +210,7 @@ async def upload_carteirinhas(
         raise
     except Exception as e:
         import traceback
-        traceback.print_exc() # Print stack trace to console for debugging
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 @router.get("/")
