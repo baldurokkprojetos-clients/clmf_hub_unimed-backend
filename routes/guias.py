@@ -23,8 +23,6 @@ def list_guias(
     carteirinha_id: Optional[int] = None,
     limit: int = 25,
     skip: int = 0,
-    limit: int = 25,
-    skip: int = 0,
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
@@ -48,7 +46,6 @@ def list_guias(
 def export_guias(
     created_at_start: Optional[str] = Query(None, description="Start Date (YYYY-MM-DD)"),
     created_at_end: Optional[str] = Query(None, description="End Date (YYYY-MM-DD)"),
-    carteirinha_id: Optional[int] = Query(None, description="Filter by Carteirinha ID"),
     carteirinha_id: Optional[int] = Query(None, description="Filter by Carteirinha ID"),
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)

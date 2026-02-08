@@ -58,8 +58,6 @@ def list_jobs(
     created_at_end: Optional[date] = None,
     limit: int = 25, 
     skip: int = 0,
-    limit: int = 25, 
-    skip: int = 0,
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):

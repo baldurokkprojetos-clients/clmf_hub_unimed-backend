@@ -106,7 +106,6 @@ def list_pei(
     validade_start: Optional[date] = None,
     validade_end: Optional[date] = None,
     vencimento_filter: Optional[str] = None, # vencidos, vence_d7, vence_d30
-    vencimento_filter: Optional[str] = None, # vencidos, vence_d7, vence_d30
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
@@ -166,7 +165,6 @@ def export_pei(
     status: Optional[str] = None,
     validade_start: Optional[date] = None,
     validade_end: Optional[date] = None,
-    vencimento_filter: Optional[str] = None,
     vencimento_filter: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
@@ -240,7 +238,6 @@ def export_pei(
 
 @router.post("/override")
 def override_pei(
-    req: PeiOverrideRequest,
     req: PeiOverrideRequest,
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
