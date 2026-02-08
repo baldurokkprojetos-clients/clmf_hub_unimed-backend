@@ -208,13 +208,13 @@ def export_pei(
                 row.carteirinha_rel.carteirinha if row.carteirinha_rel else "",
                 row.codigo_terapia,
                 guia_num,
-                data_auth,
+                data_auth.strftime("%d/%m/%Y") if data_auth else "",
                 senha,
                 qtd_aut,
                 row.pei_semanal,
-                row.validade,
+                row.validade.strftime("%d/%m/%Y") if row.validade else "",
                 row.status,
-                updated_at_val
+                updated_at_val.strftime("%d/%m/%Y") if updated_at_val else ""
             ])
             
         output = io.BytesIO()
