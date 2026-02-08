@@ -9,10 +9,17 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Base Guias Unimed API", version="1.0.0")
 
-# Configure CORS - Allow all origins for now
+# Configure CORS
+origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "https://clmf-gestor.vercel.app",
+    "https://clmf-hub-unimed-frontend.vercel.app"
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Permite qualquer origem
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

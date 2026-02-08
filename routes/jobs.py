@@ -23,65 +23,22 @@ class CreateJobRequest(BaseModel):
 @router.post("/")
 def create_jobs(request: CreateJobRequest, db: Session = Depends(get_db)):
     created_count = 0
+    from services import job_service
     
     if request.type == 'all':
-        all_carteirinhas = db.query(Carteirinha).filter(Carteirinha.is_temporary == False).all()
-        for cart in all_carteirinhas:
-            job = Job(carteirinha_id=cart.id, status="pending")
-            db.add(job)
-            created_count += 1
+        created_count = job_service.create_all_jobs(db)
             
     elif request.type in ['single', 'multiple']:
         if not request.carteirinha_ids:
              raise HTTPException(status_code=400, detail="carteirinha_ids required for single/multiple")
         
-        for cart_id in request.carteirinha_ids:
-            # Validate existence
-            cart = db.query(Carteirinha).filter(Carteirinha.id == cart_id).first()
-            if cart:
-                job = Job(carteirinha_id=cart.id, status="pending")
-                db.add(job)
-                created_count += 1
+        created_count = job_service.create_jobs_bulk(db, request.carteirinha_ids)
     
     elif request.type == 'temp':
         if not request.temp_patient:
              raise HTTPException(status_code=400, detail="temp_patient data required for temp job")
              
-        # Check if carteirinha already exists (even temp)
-        existing = db.query(Carteirinha).filter(Carteirinha.carteirinha == request.temp_patient.carteirinha).first()
-        cart_id = None
-        
-        if existing:
-            # Update expiry if temporary?
-            if existing.is_temporary:
-                existing.expires_at = datetime.utcnow() + timedelta(hours=1)
-                existing.paciente = request.temp_patient.paciente # Update name just in case
-            cart_id = existing.id
-        else:
-            # Create new temporary patient
-            import random
-            # Fake id_paciente? User said "gera idpaciente aleatorio"
-            fake_id_paciente = random.randint(900000, 999999) 
-            
-            new_cart = Carteirinha(
-                carteirinha=request.temp_patient.carteirinha,
-                paciente=request.temp_patient.paciente,
-                id_paciente=fake_id_paciente,
-                is_temporary=True,
-                expires_at=datetime.utcnow() + timedelta(hours=1)
-            )
-            db.add(new_cart)
-            db.flush() # Get ID
-            cart_id = new_cart.id
-            created_count += 1 # Count patient creation? Or just jobs? 
-        
-        # Create Job
-        job = Job(carteirinha_id=cart_id, status="pending")
-        db.add(job)
-        if not existing:
-             # created_count is mainly about jobs/actions successfully queued
-             pass
-        created_count = 1 
+        created_count = job_service.create_temp_job(db, request.temp_patient.carteirinha, request.temp_patient.paciente)
                 
     else:
         raise HTTPException(status_code=400, detail="Invalid job type")
