@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
+from dependencies import get_current_user
 from sqlalchemy.orm import Session
 from database import get_db
 from models import Job, Carteirinha
@@ -21,7 +22,11 @@ class CreateJobRequest(BaseModel):
     temp_patient: Optional[TemporaryPatientData] = None
 
 @router.post("/")
-def create_jobs(request: CreateJobRequest, db: Session = Depends(get_db)):
+def create_jobs(
+    request: CreateJobRequest, 
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
     created_count = 0
     from services import job_service
     
@@ -53,7 +58,10 @@ def list_jobs(
     created_at_end: Optional[date] = None,
     limit: int = 25, 
     skip: int = 0,
-    db: Session = Depends(get_db)
+    limit: int = 25, 
+    skip: int = 0,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
     query = db.query(Job)
     

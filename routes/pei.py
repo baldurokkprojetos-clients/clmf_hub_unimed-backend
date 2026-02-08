@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from database import get_db
+from dependencies import get_current_user
 from models import PatientPei, PeiTemp, BaseGuia, Carteirinha
 from services.pei_service import update_patient_pei
 from pydantic import BaseModel
@@ -57,7 +58,10 @@ def apply_filters(query, search, status, validade_start, validade_end, venciment
     return query
 
 @router.get("/dashboard")
-def get_dashboard_stats(db: Session = Depends(get_db)):
+def get_dashboard_stats(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
     today = date.today()
     
     # Base query for active patients? Or just all?
@@ -102,7 +106,9 @@ def list_pei(
     validade_start: Optional[date] = None,
     validade_end: Optional[date] = None,
     vencimento_filter: Optional[str] = None, # vencidos, vence_d7, vence_d30
-    db: Session = Depends(get_db)
+    vencimento_filter: Optional[str] = None, # vencidos, vence_d7, vence_d30
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
     # Optimized query selecting only necessary columns
     query = db.query(
@@ -161,7 +167,9 @@ def export_pei(
     validade_start: Optional[date] = None,
     validade_end: Optional[date] = None,
     vencimento_filter: Optional[str] = None,
-    db: Session = Depends(get_db)
+    vencimento_filter: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
     query = db.query(PatientPei).join(Carteirinha).outerjoin(BaseGuia, PatientPei.base_guia_id == BaseGuia.id)
     query = apply_filters(query, search, status, validade_start, validade_end, vencimento_filter)
@@ -233,7 +241,9 @@ def export_pei(
 @router.post("/override")
 def override_pei(
     req: PeiOverrideRequest,
-    db: Session = Depends(get_db)
+    req: PeiOverrideRequest,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
     # Upsert PeiTemp
     temp = db.query(PeiTemp).filter(PeiTemp.base_guia_id == req.guia_id).first()

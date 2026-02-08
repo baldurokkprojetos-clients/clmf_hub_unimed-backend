@@ -9,8 +9,13 @@ router = APIRouter(
     tags=["Dashboard"]
 )
 
+from dependencies import get_current_user
+
 @router.get("/stats")
-def get_dashboard_stats(db: Session = Depends(get_db)):
+def get_dashboard_stats(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
     # Simple counts
     total_carteirinhas = db.query(Carteirinha).count()
     total_guias = db.query(BaseGuia).count()

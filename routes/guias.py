@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from database import get_db
+from dependencies import get_current_user
 from models import BaseGuia, Carteirinha
 from typing import Optional
 from datetime import date, datetime, timedelta
@@ -22,7 +23,10 @@ def list_guias(
     carteirinha_id: Optional[int] = None,
     limit: int = 25,
     skip: int = 0,
-    db: Session = Depends(get_db)
+    limit: int = 25,
+    skip: int = 0,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
     query = db.query(BaseGuia)
     
@@ -45,7 +49,9 @@ def export_guias(
     created_at_start: Optional[str] = Query(None, description="Start Date (YYYY-MM-DD)"),
     created_at_end: Optional[str] = Query(None, description="End Date (YYYY-MM-DD)"),
     carteirinha_id: Optional[int] = Query(None, description="Filter by Carteirinha ID"),
-    db: Session = Depends(get_db)
+    carteirinha_id: Optional[int] = Query(None, description="Filter by Carteirinha ID"),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
     query = db.query(BaseGuia).join(Carteirinha)
     
