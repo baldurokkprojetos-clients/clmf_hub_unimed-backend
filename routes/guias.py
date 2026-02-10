@@ -61,7 +61,9 @@ def export_guias(
     if carteirinha_id:
         query = query.filter(BaseGuia.carteirinha_id == carteirinha_id)
 
+    print("DEBUG: Executing Query...")
     results = query.all()
+    print(f"DEBUG: Query finished. Total records: {len(results)}")
 
     # Helper to format date
     def fmt_date(d):
@@ -78,6 +80,7 @@ def export_guias(
     ws.append(headers)
     
     # Data rows
+    print("DEBUG: Building Excel Rows...")
     for row in results:
         ws.append([
             row.carteirinha_rel.carteirinha if row.carteirinha_rel else "",
@@ -92,9 +95,11 @@ def export_guias(
             row.created_at.strftime("%d/%m/%Y %H:%M:%S") if row.created_at else ""
         ])
 
+    print("DEBUG: Saving Workbook to BytesIO...")
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
+    print("DEBUG: Workbook saved. Returning response.")
     
     headers = {
         'Content-Disposition': 'attachment; filename="guias_exportadas.xlsx"'

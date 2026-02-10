@@ -169,11 +169,14 @@ def export_pei(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    query = db.query(PatientPei).join(Carteirinha).outerjoin(BaseGuia, PatientPei.base_guia_id == BaseGuia.id)
-    query = apply_filters(query, search, status, validade_start, validade_end, vencimento_filter)
-    
+    print("DEBUG: Starting PEI Export...")
     try:
+        query = db.query(PatientPei).join(Carteirinha).outerjoin(BaseGuia, PatientPei.base_guia_id == BaseGuia.id)
+        query = apply_filters(query, search, status, validade_start, validade_end, vencimento_filter)
+        
+        print("DEBUG: Executing Query...")
         results = query.all()
+        print(f"DEBUG: Query finished. Total records: {len(results)}")
         
         # Generate Excel
         wb = openpyxl.Workbook()
@@ -187,9 +190,11 @@ def export_pei(
             "PEI Semanal", "Validade", "Status", "Atualizado Em"
         ])
         
+        print("DEBUG: Building Excel Rows...")
         for row in results:
             # Handle timezone naive for Excel
             updated_at_val = row.updated_at
+            # Ensure it's not None before checking tzinfo
             if updated_at_val and updated_at_val.tzinfo:
                 updated_at_val = updated_at_val.replace(tzinfo=None)
             
@@ -199,7 +204,7 @@ def export_pei(
             senha = row.base_guia_rel.senha if row.base_guia_rel else "-"
             qtd_aut = row.base_guia_rel.sessoes_autorizadas if row.base_guia_rel else 0
             
-            # ID Paciente (from Carteirinha model field id_paciente, not database PK)
+            # ID Paciente
             id_paciente_real = row.carteirinha_rel.id_paciente if row.carteirinha_rel else ""
 
             ws.append([
@@ -217,9 +222,11 @@ def export_pei(
                 updated_at_val.strftime("%d/%m/%Y") if updated_at_val else ""
             ])
             
+        print("DEBUG: Saving Workbook to BytesIO...")
         output = io.BytesIO()
         wb.save(output)
         output.seek(0)
+        print("DEBUG: Workbook saved. Returning response.")
         
         filename = f"export_pei_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         
@@ -227,13 +234,14 @@ def export_pei(
             'Content-Disposition': f'attachment; filename="{filename}"'
         }
         
-        return Response(
-            content=output.getvalue(), 
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(
+            output, 
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
             headers=headers
         )
     except Exception as e:
-        print(f"Export Error: {str(e)}")
+        print(f"DEBUG: Export Error: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Erro ao exportar: {str(e)}")
 
 @router.post("/override")
