@@ -170,18 +170,11 @@ def export_pei(
     current_user = Depends(get_current_user)
 ):
     print("DEBUG: Starting PEI Export...")
+    print("DEBUG: Starting PEI Export (Optimized)...")
     try:
-        query = db.query(PatientPei).join(Carteirinha).outerjoin(BaseGuia, PatientPei.base_guia_id == BaseGuia.id)
-        query = apply_filters(query, search, status, validade_start, validade_end, vencimento_filter)
-        
-        print("DEBUG: Executing Query...")
-        results = query.all()
-        print(f"DEBUG: Query finished. Total records: {len(results)}")
-        
-        # Generate Excel
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "PEI Export"
+        # Generate Excel (Write Only Mode for Performance)
+        wb = openpyxl.Workbook(write_only=True)
+        ws = wb.create_sheet("PEI Export")
         
         # Header
         ws.append([
@@ -190,44 +183,59 @@ def export_pei(
             "PEI Semanal", "Validade", "Status", "Atualizado Em"
         ])
         
-        print("DEBUG: Building Excel Rows...")
-        for row in results:
-            # Handle timezone naive for Excel
-            updated_at_val = row.updated_at
-            # Ensure it's not None before checking tzinfo
-            if updated_at_val and updated_at_val.tzinfo:
-                updated_at_val = updated_at_val.replace(tzinfo=None)
+        # Generator function for streaming rows
+        def generate_rows():
+            print("DEBUG: Executing Query...")
+            # Use yield_per to stream results from DB instead of loading all into memory
+            query = db.query(PatientPei).join(Carteirinha).outerjoin(BaseGuia, PatientPei.base_guia_id == BaseGuia.id)
+            query = apply_filters(query, search, status, validade_start, validade_end, vencimento_filter)
             
-            # Base Guia Helpers
-            guia_num = row.base_guia_rel.guia if row.base_guia_rel else "-"
-            data_auth = row.base_guia_rel.data_autorizacao if row.base_guia_rel else None
-            senha = row.base_guia_rel.senha if row.base_guia_rel else "-"
-            qtd_aut = row.base_guia_rel.sessoes_autorizadas if row.base_guia_rel else 0
+            # Fetch in chunks to reduce memory usage
+            # Note: SQLite might not support yield_per strictly, but it's good practice. 
+            # In sync mode with small datasets it's fine.
+            # For strict speed we could fetch raw tuples but ORM is cleaner.
             
-            # ID Paciente
-            id_paciente_real = row.carteirinha_rel.id_paciente if row.carteirinha_rel else ""
+            results = query.yield_per(500)
+            
+            count = 0
+            for row in results:
+                count += 1
+                # Handle timezone naive
+                updated_at_val = row.updated_at
+                if updated_at_val and updated_at_val.tzinfo:
+                    updated_at_val = updated_at_val.replace(tzinfo=None)
+                
+                # Base Guia Helpers
+                guia_num = row.base_guia_rel.guia if row.base_guia_rel else "-"
+                data_auth = row.base_guia_rel.data_autorizacao if row.base_guia_rel else None
+                senha = row.base_guia_rel.senha if row.base_guia_rel else "-"
+                qtd_aut = row.base_guia_rel.sessoes_autorizadas if row.base_guia_rel else 0
+                
+                # ID Paciente
+                id_paciente_real = row.carteirinha_rel.id_paciente if row.carteirinha_rel else ""
 
-            ws.append([
-                id_paciente_real,
-                row.carteirinha_rel.paciente if row.carteirinha_rel else "",
-                row.carteirinha_rel.carteirinha if row.carteirinha_rel else "",
-                row.codigo_terapia,
-                guia_num,
-                data_auth.strftime("%d/%m/%Y") if data_auth else "",
-                senha,
-                qtd_aut,
-                row.pei_semanal,
-                row.validade.strftime("%d/%m/%Y") if row.validade else "",
-                row.status,
-                updated_at_val.strftime("%d/%m/%Y") if updated_at_val else ""
-            ])
+                ws.append([
+                    id_paciente_real,
+                    row.carteirinha_rel.paciente if row.carteirinha_rel else "",
+                    row.carteirinha_rel.carteirinha if row.carteirinha_rel else "",
+                    row.codigo_terapia,
+                    guia_num,
+                    data_auth.strftime("%d/%m/%Y") if data_auth else "",
+                    senha,
+                    qtd_aut,
+                    row.pei_semanal,
+                    row.validade.strftime("%d/%m/%Y") if row.validade else "",
+                    row.status if row.status else "Pendente",
+                    updated_at_val.strftime("%d/%m/%Y") if updated_at_val else ""
+                ])
+            print(f"DEBUG: Processed {count} rows.")
             
-        print("DEBUG: Saving Workbook to BytesIO...")
-        output = io.BytesIO()
-        wb.save(output)
-        output.seek(0)
-        print("DEBUG: Workbook saved. Returning response.")
-        
+            # After adding all rows to worksheet, save to stream
+            output = io.BytesIO()
+            wb.save(output)
+            output.seek(0)
+            yield output.getvalue()
+
         filename = f"export_pei_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         
         headers = {
@@ -235,14 +243,85 @@ def export_pei(
         }
         
         from fastapi.responses import StreamingResponse
-        return StreamingResponse(
-            output, 
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
-            headers=headers
-        )
+        # Note: StreamingResponse with yield is tricky for zip/xlsx because headers are at the end.
+        # Ideally we buffer the whole xlsx. 
+        # But 'generate_rows' here yields ONE big chunk. 
+        # To truly stream xlsx we need to yield chunks of bytes which openpyxl doesn't support easily.
+        # So we just optimize the building part.
+        
+        # We can't yield parts of a zip file easily. So we just call the generator to get the bytes.
+        # But wait, StreamingResponse expects an iterator of bytes.
+        
+        # Reverting to direct save but kept write_only=True which is faster.
+        
+        output = io.BytesIO()
+        wb.save(output) # This will fail if no rows added yet? No.
+        
+        # Re-implementing correctly: iterate query, write to wb, then save.
+        pass
+
     except Exception as e:
         print(f"DEBUG: Export Error: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Erro ao exportar: {str(e)}")
+    
+    # Correct Implementation of body
+    # Generate Excel (Write Only Mode for Performance)
+    wb = openpyxl.Workbook(write_only=True)
+    ws = wb.create_sheet("PEI Export")
+    
+    # Header
+    ws.append([
+        "ID Paciente", "Paciente", "Carteirinha", "Código Terapia", 
+        "Guia Vinculada", "Data Autorização", "Senha", "Qtd Autorizada",
+        "PEI Semanal", "Validade", "Status", "Atualizado Em"
+    ])
+    
+    print("DEBUG: Executing Query...")
+    query = db.query(PatientPei).join(Carteirinha).outerjoin(BaseGuia, PatientPei.base_guia_id == BaseGuia.id)
+    query = apply_filters(query, search, status, validade_start, validade_end, vencimento_filter)
+    
+    # Use yield_per
+    results = query.yield_per(500)
+    
+    count = 0
+    for row in results:
+        count += 1
+        updated_at_val = row.updated_at
+        if updated_at_val and updated_at_val.tzinfo:
+            updated_at_val = updated_at_val.replace(tzinfo=None)
+        
+        # Base Guia Helpers
+        guia_num = row.base_guia_rel.guia if row.base_guia_rel else "-"
+        data_auth = row.base_guia_rel.data_autorizacao if row.base_guia_rel else None
+        senha = row.base_guia_rel.senha if row.base_guia_rel else "-"
+        qtd_aut = row.base_guia_rel.sessoes_autorizadas if row.base_guia_rel else 0
+        id_paciente_real = row.carteirinha_rel.id_paciente if row.carteirinha_rel else ""
+
+        ws.append([
+            id_paciente_real,
+            row.carteirinha_rel.paciente if row.carteirinha_rel else "",
+            row.carteirinha_rel.carteirinha if row.carteirinha_rel else "",
+            row.codigo_terapia,
+            guia_num,
+            data_auth.strftime("%d/%m/%Y") if data_auth else "",
+            senha,
+            qtd_aut,
+            row.pei_semanal,
+            row.validade.strftime("%d/%m/%Y") if row.validade else "",
+            row.status,
+            updated_at_val.strftime("%d/%m/%Y") if updated_at_val else ""
+        ])
+    
+    print(f"DEBUG: Processed {count} rows. Saving...")
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    filename = f"export_pei_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    headers = {'Content-Disposition': f'attachment; filename="{filename}"'}
+    
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers=headers)
 
 @router.post("/override")
 def override_pei(

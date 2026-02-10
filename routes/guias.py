@@ -61,47 +61,42 @@ def export_guias(
     if carteirinha_id:
         query = query.filter(BaseGuia.carteirinha_id == carteirinha_id)
 
-    print("DEBUG: Executing Query...")
-    results = query.all()
-    print(f"DEBUG: Query finished. Total records: {len(results)}")
+    # Optimized Excel Generation
+    try:
+        wb = Workbook(write_only=True)
+        ws = wb.create_sheet("Guias")
+        
+        headers = ["Carteirinha", "Paciente", "Guia", "Data_Autorização", "Senha", 
+                   "Validade", "Código_Terapia", "Qtde_Solicitada", "Sessões Autorizadas", "Importado_Em"]
+        ws.append(headers)
+        
+        print("DEBUG: Executing Query with yield_per...")
+        # Use yield_per to reduce memory overhead
+        results = query.yield_per(500)
+        
+        for row in results:
+            ws.append([
+                row.carteirinha_rel.carteirinha if row.carteirinha_rel else "",
+                row.carteirinha_rel.paciente if row.carteirinha_rel else "",
+                row.guia,
+                fmt_date(row.data_autorizacao),
+                row.senha,
+                fmt_date(row.validade),
+                row.codigo_terapia,
+                row.qtde_solicitada,
+                row.sessoes_autorizadas,
+                row.created_at.strftime("%d/%m/%Y %H:%M:%S") if row.created_at else ""
+            ])
 
-    # Helper to format date
-    def fmt_date(d):
-        return d.strftime("%d/%m/%Y") if d else ""
-
-    # Create Excel workbook with openpyxl
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Guias"
-    
-    # Headers
-    headers = ["Carteirinha", "Paciente", "Guia", "Data_Autorização", "Senha", 
-               "Validade", "Código_Terapia", "Qtde_Solicitada", "Sessões Autorizadas", "Importado_Em"]
-    ws.append(headers)
-    
-    # Data rows
-    print("DEBUG: Building Excel Rows...")
-    for row in results:
-        ws.append([
-            row.carteirinha_rel.carteirinha if row.carteirinha_rel else "",
-            row.carteirinha_rel.paciente if row.carteirinha_rel else "",
-            row.guia,
-            fmt_date(row.data_autorizacao),
-            row.senha,
-            fmt_date(row.validade),
-            row.codigo_terapia,
-            row.qtde_solicitada,
-            row.sessoes_autorizadas,
-            row.created_at.strftime("%d/%m/%Y %H:%M:%S") if row.created_at else ""
-        ])
-
-    print("DEBUG: Saving Workbook to BytesIO...")
-    output = io.BytesIO()
-    wb.save(output)
-    output.seek(0)
-    print("DEBUG: Workbook saved. Returning response.")
-    
-    headers = {
-        'Content-Disposition': 'attachment; filename="guias_exportadas.xlsx"'
-    }
-    return StreamingResponse(output, headers=headers, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        print("DEBUG: Saving Workbook...")
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        headers = {
+            'Content-Disposition': 'attachment; filename="guias_exportadas.xlsx"'
+        }
+        return StreamingResponse(output, headers=headers, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    except Exception as e:
+        print(f"Export Error: {e}")
+        raise HTTPException(status_code=500, detail="Erro ao gerar arquivo")
