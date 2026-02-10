@@ -266,64 +266,87 @@ def export_pei(
         print(f"DEBUG: Export Error: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Erro ao exportar: {str(e)}")
     
-    # Correct Implementation of body
-    # Generate Excel (Write Only Mode for Performance)
-    wb = openpyxl.Workbook(write_only=True)
-    ws = wb.create_sheet("PEI Export")
-    
-    # Header
-    ws.append([
-        "ID Paciente", "Paciente", "Carteirinha", "Código Terapia", 
-        "Guia Vinculada", "Data Autorização", "Senha", "Qtd Autorizada",
-        "PEI Semanal", "Validade", "Status", "Atualizado Em"
-    ])
-    
-    print("DEBUG: Executing Query...")
-    query = db.query(PatientPei).join(Carteirinha).outerjoin(BaseGuia, PatientPei.base_guia_id == BaseGuia.id)
-    query = apply_filters(query, search, status, validade_start, validade_end, vencimento_filter)
-    
-    # Use yield_per
-    results = query.yield_per(500)
-    
-    count = 0
-    for row in results:
-        count += 1
-        updated_at_val = row.updated_at
-        if updated_at_val and updated_at_val.tzinfo:
-            updated_at_val = updated_at_val.replace(tzinfo=None)
+    try:
+        # Generate Excel (Write Only Mode for Performance)
+        wb = openpyxl.Workbook(write_only=True)
+        ws = wb.create_sheet("PEI Export")
         
-        # Base Guia Helpers
-        guia_num = row.base_guia_rel.guia if row.base_guia_rel else "-"
-        data_auth = row.base_guia_rel.data_autorizacao if row.base_guia_rel else None
-        senha = row.base_guia_rel.senha if row.base_guia_rel else "-"
-        qtd_aut = row.base_guia_rel.sessoes_autorizadas if row.base_guia_rel else 0
-        id_paciente_real = row.carteirinha_rel.id_paciente if row.carteirinha_rel else ""
-
+        # Header
         ws.append([
-            id_paciente_real,
-            row.carteirinha_rel.paciente if row.carteirinha_rel else "",
-            row.carteirinha_rel.carteirinha if row.carteirinha_rel else "",
-            row.codigo_terapia,
-            guia_num,
-            data_auth.strftime("%d/%m/%Y") if data_auth else "",
-            senha,
-            qtd_aut,
-            row.pei_semanal,
-            row.validade.strftime("%d/%m/%Y") if row.validade else "",
-            row.status,
-            updated_at_val.strftime("%d/%m/%Y") if updated_at_val else ""
+            "ID Paciente", "Paciente", "Carteirinha", "ID Pagamento", "Código Terapia", 
+            "Guia Vinculada", "Data Autorização", "Senha", "Qtd Autorizada",
+            "PEI Semanal", "Validade", "Status", "Atualizado Em"
         ])
-    
-    print(f"DEBUG: Processed {count} rows. Saving...")
-    output = io.BytesIO()
-    wb.save(output)
-    output.seek(0)
-    
-    filename = f"export_pei_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    headers = {'Content-Disposition': f'attachment; filename="{filename}"'}
-    
-    from fastapi.responses import StreamingResponse
-    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers=headers)
+        
+        print("DEBUG: Executing Query (Raw Tuples)...")
+        # Optimization: Select ONLY the columns we need as a tuple
+        # This prevents SQLAlchemy from creating thousands of objects and doing N+1 loads
+        query = db.query(
+            Carteirinha.id_paciente,          # 0
+            Carteirinha.paciente,             # 1
+            Carteirinha.carteirinha,          # 2
+            Carteirinha.id_pagamento,         # 3 - REQUESTED FIELD
+            PatientPei.codigo_terapia,        # 4
+            BaseGuia.guia,                    # 5
+            BaseGuia.data_autorizacao,        # 6
+            BaseGuia.senha,                   # 7
+            BaseGuia.sessoes_autorizadas,     # 8
+            PatientPei.pei_semanal,           # 9
+            PatientPei.validade,              # 10
+            PatientPei.status,                # 11
+            PatientPei.updated_at             # 12
+        ).select_from(PatientPei)\
+         .join(Carteirinha, PatientPei.carteirinha_id == Carteirinha.id)\
+         .outerjoin(BaseGuia, PatientPei.base_guia_id == BaseGuia.id)
+        
+        query = apply_filters(query, search, status, validade_start, validade_end, vencimento_filter)
+        
+        # Use yield_per to stream results from DB
+        results = query.yield_per(1000)
+        
+        count = 0
+        for row in results:
+            count += 1
+            # Row is now a tuple, access by index or name
+            
+            # Handle timezone naive
+            updated_at_val = row.updated_at
+            if updated_at_val and updated_at_val.tzinfo:
+                updated_at_val = updated_at_val.replace(tzinfo=None)
+            
+            # Helper for dates
+            def fmt(d): return d.strftime("%d/%m/%Y") if d else ""
+
+            ws.append([
+                row.id_paciente or "",                  # ID Paciente
+                row.paciente or "",                     # Paciente
+                row.carteirinha or "",                  # Carteirinha
+                row.id_pagamento or "",                 # ID Pagamento (Direct from select)
+                row.codigo_terapia,                     # Codigo Terapia
+                row.guia or "-",                        # Guia
+                fmt(row.data_autorizacao),              # Data Auth
+                row.senha or "-",                       # Senha
+                row.sessoes_autorizadas or 0,           # Qtd Aut
+                row.pei_semanal,                        # PEI
+                fmt(row.validade),                      # Validade
+                row.status if row.status else "Pendente", # Status
+                fmt(updated_at_val)                     # Atualizado Em
+            ])
+        
+        print(f"DEBUG: Processed {count} rows. Saving...")
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        filename = f"export_pei_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        headers = {'Content-Disposition': f'attachment; filename="{filename}"'}
+        
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers=headers)
+
+    except Exception as e:
+        print(f"DEBUG: Export Error: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Erro ao exportar: {str(e)}")
 
 @router.post("/override")
 def override_pei(
