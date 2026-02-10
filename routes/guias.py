@@ -50,17 +50,6 @@ def export_guias(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    query = db.query(BaseGuia).join(Carteirinha)
-    
-    if created_at_start:
-        query = query.filter(BaseGuia.updated_at >= created_at_start)
-    if created_at_end:
-        # Add one day to include full end date
-        end_dt = datetime.strptime(created_at_end, '%Y-%m-%d').date() + timedelta(days=1)
-        query = query.filter(BaseGuia.updated_at <= str(end_dt))
-    if carteirinha_id:
-        query = query.filter(BaseGuia.carteirinha_id == carteirinha_id)
-
     # Optimized Excel Generation
     try:
         wb = Workbook(write_only=True)
@@ -70,14 +59,38 @@ def export_guias(
                    "Validade", "Código_Terapia", "Qtde_Solicitada", "Sessões Autorizadas", "Importado_Em"]
         ws.append(headers)
         
-        print("DEBUG: Executing Query with yield_per...")
-        # Use yield_per to reduce memory overhead
-        results = query.yield_per(500)
+        print("DEBUG: Executing Query with raw tuples...")
+        # Use yield_per to reduce memory overhead and tuple selection to avoid N+1 and lazy loading issues
+        query = db.query(
+            Carteirinha.carteirinha,         # 0
+            Carteirinha.paciente,            # 1
+            BaseGuia.guia,                   # 2
+            BaseGuia.data_autorizacao,       # 3
+            BaseGuia.senha,                  # 4
+            BaseGuia.validade,               # 5
+            BaseGuia.codigo_terapia,         # 6
+            BaseGuia.qtde_solicitada,        # 7
+            BaseGuia.sessoes_autorizadas,    # 8
+            BaseGuia.created_at              # 9
+        ).select_from(BaseGuia).join(Carteirinha, BaseGuia.carteirinha_id == Carteirinha.id)
+
+        if created_at_start:
+            query = query.filter(BaseGuia.updated_at >= created_at_start)
+        if created_at_end:
+            # Add one day to include full end date
+            end_dt = datetime.strptime(created_at_end, '%Y-%m-%d').date() + timedelta(days=1)
+            query = query.filter(BaseGuia.updated_at <= str(end_dt))
+        if carteirinha_id:
+            query = query.filter(BaseGuia.carteirinha_id == carteirinha_id)
         
+        results = query.yield_per(1000)
+        
+        count = 0
         for row in results:
+            count += 1
             ws.append([
-                row.carteirinha_rel.carteirinha if row.carteirinha_rel else "",
-                row.carteirinha_rel.paciente if row.carteirinha_rel else "",
+                row.carteirinha or "",
+                row.paciente or "",
                 row.guia,
                 fmt_date(row.data_autorizacao),
                 row.senha,
@@ -88,7 +101,7 @@ def export_guias(
                 row.created_at.strftime("%d/%m/%Y %H:%M:%S") if row.created_at else ""
             ])
 
-        print("DEBUG: Saving Workbook...")
+        print(f"DEBUG: Processed {count} rows. Saving Workbook...")
         output = io.BytesIO()
         wb.save(output)
         output.seek(0)
@@ -99,4 +112,6 @@ def export_guias(
         return StreamingResponse(output, headers=headers, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     except Exception as e:
         print(f"Export Error: {e}")
-        raise HTTPException(status_code=500, detail="Erro ao gerar arquivo")
+        # Return the actual error details for debugging instead of generic 500
+        # In production this might be bad, but for debugging now it's essential
+        raise HTTPException(status_code=500, detail=f"Erro ao gerar arquivo: {str(e)}")
