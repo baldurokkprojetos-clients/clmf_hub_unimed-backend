@@ -59,6 +59,11 @@ def export_guias(
                    "Validade", "Código_Terapia", "Qtde_Solicitada", "Sessões Autorizadas", "Importado_Em"]
         ws.append(headers)
         
+        # Helper to format date
+        def fmt_date(d):
+            return d.strftime("%d/%m/%Y") if d else ""
+
+        
         print("DEBUG: Executing Query with raw tuples...")
         # Use yield_per to reduce memory overhead and tuple selection to avoid N+1 and lazy loading issues
         query = db.query(
