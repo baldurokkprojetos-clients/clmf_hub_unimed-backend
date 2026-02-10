@@ -178,7 +178,7 @@ def export_pei(
         
         # Header
         ws.append([
-            "ID Paciente", "Paciente", "Carteirinha", "Código Terapia", 
+            "ID Paciente", "Paciente", "Carteirinha", "ID Pagamento", "Código Terapia", 
             "Guia Vinculada", "Data Autorização", "Senha", "Qtd Autorizada",
             "PEI Semanal", "Validade", "Status", "Atualizado Em"
         ])
@@ -213,11 +213,13 @@ def export_pei(
                 
                 # ID Paciente
                 id_paciente_real = row.carteirinha_rel.id_paciente if row.carteirinha_rel else ""
+                id_pagamento_val = row.carteirinha_rel.id_pagamento if row.carteirinha_rel and row.carteirinha_rel.id_pagamento else ""
 
                 ws.append([
                     id_paciente_real,
                     row.carteirinha_rel.paciente if row.carteirinha_rel else "",
                     row.carteirinha_rel.carteirinha if row.carteirinha_rel else "",
+                    id_pagamento_val,
                     row.codigo_terapia,
                     guia_num,
                     data_auth.strftime("%d/%m/%Y") if data_auth else "",
