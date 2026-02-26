@@ -14,6 +14,17 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+class Convenio(Base):
+    __tablename__ = "convenios"
+
+    id = Column(Integer, primary_key=True, index=True)
+    nome = Column(Text, nullable=False)
+    status = Column(Text, default="ativo")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # carteirinhas = relationship("Carteirinha", back_populates="convenio_rel")
+
 class Carteirinha(Base):
     __tablename__ = "carteirinhas"
 

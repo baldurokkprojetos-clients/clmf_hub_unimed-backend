@@ -301,6 +301,9 @@ def export_pei(
         
         query = apply_filters(query, search, status, validade_start, validade_end, vencimento_filter)
         
+        # Exclude temporary patients from export
+        query = query.filter(Carteirinha.is_temporary == False)
+        
         # Use yield_per to stream results from DB
         results = query.yield_per(1000)
         
