@@ -75,9 +75,23 @@ def list_jobs(
     # Order by priority desc, created_at asc
     total = query.count()
     jobs = query.order_by(Job.priority.desc(), Job.created_at.desc()).limit(limit).offset(skip).all()
-    # Note: Changed order to desc created_at to show newest first
-    
-    return {"data": jobs, "total": total, "skip": skip, "limit": limit}
+
+    def job_to_dict(j):
+        return {
+            "id": j.id,
+            "carteirinha_id": j.carteirinha_id,
+            "status": j.status,
+            "attempts": j.attempts,
+            "priority": j.priority,
+            "locked_by": j.locked_by,
+            "valida_prestador": j.valida_prestador,
+            "created_at": j.created_at,
+            "updated_at": j.updated_at,
+            "paciente": j.carteirinha_rel.paciente if j.carteirinha_rel else None,
+            "carteirinha": j.carteirinha_rel.carteirinha if j.carteirinha_rel else None,
+        }
+
+    return {"data": [job_to_dict(j) for j in jobs], "total": total, "skip": skip, "limit": limit}
 
 @router.delete("/{id}")
 def delete_job(id: int, db: Session = Depends(get_db)):
@@ -85,15 +99,10 @@ def delete_job(id: int, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(404, "Job not found")
         
-    # Validation: Only delete if error and attempts > 3
-    # User said: "probido exclusão de jobs em andamento ou com status sucess"
-    # "um Job só poderá ser excluido se status seja error e tentativas maior que 3"
-    
-    allowed = (job.status == 'error' and job.attempts > 3)
-    # Or maybe allow pending if it's stuck? User didn't specify. Sticking to strict rule.
+    allowed = (job.status == 'error' and job.attempts >= 3)
     
     if not allowed:
-         raise HTTPException(status_code=400, detail="Exclusão permitida apenas para Jobs com erro e mais de 3 tentativas.")
+         raise HTTPException(status_code=400, detail="Exclusão permitida apenas para Jobs com erro e 3 ou mais tentativas.")
          
     db.delete(job)
     db.commit()
@@ -111,10 +120,10 @@ def retry_job(id: int, db: Session = Depends(get_db)):
     # So implies retry is available for error jobs. 
     # And "reenviar(caso estatus seja error e tentativas maior que 3)"
     
-    allowed = (job.status == 'error' and job.attempts > 3)
+    allowed = (job.status == 'error')
     
     if not allowed:
-        raise HTTPException(status_code=400, detail="Reenvio permitido apenas para Jobs com erro e mais de 3 tentativas.")
+        raise HTTPException(status_code=400, detail="Reenvio permitido apenas para Jobs com erro.")
 
     job.status = 'pending'
     job.attempts = 0

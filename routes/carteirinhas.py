@@ -297,6 +297,10 @@ def create_carteirinha(item: dict = Body(...), db: Session = Depends(get_db), us
     """Create a new carteirinha"""
     if 'carteirinha' not in item:
         raise HTTPException(status_code=400, detail="Field 'carteirinha' is required")
+    if 'id_paciente' not in item or item.get('id_paciente') is None:
+        raise HTTPException(status_code=400, detail="O campo 'ID Paciente' é obrigatório")
+    if 'id_pagamento' not in item or item.get('id_pagamento') is None:
+        raise HTTPException(status_code=400, detail="O campo 'Convênio (ID Pagamento)' é obrigatório")
     
     # Validate format
     validate_carteirinha_format(item['carteirinha'])
@@ -332,8 +336,12 @@ def update_carteirinha(carteirinha_id: int, item: dict = Body(...), db: Session 
     if 'paciente' in item:
         cart.paciente = item['paciente']
     if 'id_paciente' in item:
+        if item.get('id_paciente') is None:
+            raise HTTPException(status_code=400, detail="O campo 'ID Paciente' não pode ficar vazio")
         cart.id_paciente = item['id_paciente']
     if 'id_pagamento' in item:
+        if item.get('id_pagamento') is None:
+            raise HTTPException(status_code=400, detail="O campo 'Convênio (ID Pagamento)' não pode ficar vazio")
         cart.id_pagamento = item['id_pagamento']
     if 'status' in item:
         cart.status = item['status']
