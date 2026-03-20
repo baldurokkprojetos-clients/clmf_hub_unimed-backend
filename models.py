@@ -29,16 +29,16 @@ class Carteirinha(Base):
     __tablename__ = "carteirinhas"
 
     id = Column(Integer, primary_key=True, index=True)
-    carteirinha = Column(Text, unique=True, nullable=False)
-    paciente = Column(Text)
+    carteirinha = Column(Text, unique=True, nullable=False, index=True)
+    paciente = Column(Text, index=True)
     id_paciente = Column(Integer, index=True)
     id_pagamento = Column(Integer, index=True)
-    status = Column(Text, default="ativo")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    status = Column(Text, default="ativo", index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), index=True)
     
     is_temporary = Column(Boolean, default=False)
-    expires_at = Column(DateTime(timezone=True), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
     jobs = relationship("Job", back_populates="carteirinha_rel", cascade="all, delete-orphan")
     guias = relationship("BaseGuia", back_populates="carteirinha_rel", cascade="all, delete-orphan")
@@ -65,16 +65,16 @@ class BaseGuia(Base):
     __tablename__ = "base_guias"
 
     id = Column(Integer, primary_key=True, index=True)
-    carteirinha_id = Column(Integer, ForeignKey("carteirinhas.id", ondelete="CASCADE"))
-    guia = Column(Text)
-    data_autorizacao = Column(Date)
+    carteirinha_id = Column(Integer, ForeignKey("carteirinhas.id", ondelete="CASCADE"), index=True)
+    guia = Column(Text, index=True)
+    data_autorizacao = Column(Date, index=True)
     senha = Column(Text)
-    validade = Column(Date)
-    codigo_terapia = Column(Text)
+    validade = Column(Date, index=True)
+    codigo_terapia = Column(Text, index=True)
     qtde_solicitada = Column(Integer)
     sessoes_autorizadas = Column(Integer)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), index=True)
 
     carteirinha_rel = relationship("Carteirinha", back_populates="guias")
 
@@ -91,16 +91,16 @@ class PatientPei(Base):
     __tablename__ = "patient_pei"
 
     id = Column(Integer, primary_key=True, index=True)
-    carteirinha_id = Column(Integer, ForeignKey("carteirinhas.id", ondelete="CASCADE"))
-    codigo_terapia = Column(Text)
+    carteirinha_id = Column(Integer, ForeignKey("carteirinhas.id", ondelete="CASCADE"), index=True)
+    codigo_terapia = Column(Text, index=True)
     
-    base_guia_id = Column(Integer, ForeignKey("base_guias.id", ondelete="CASCADE"))
+    base_guia_id = Column(Integer, ForeignKey("base_guias.id", ondelete="CASCADE"), index=True)
     
     pei_semanal = Column(Float)
-    validade = Column(Date)
-    status = Column(Text) # Validated, Pendente
+    validade = Column(Date, index=True)
+    status = Column(Text, index=True) # Validated, Pendente
     
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), index=True)
 
     carteirinha_rel = relationship("Carteirinha")
     base_guia_rel = relationship("BaseGuia")

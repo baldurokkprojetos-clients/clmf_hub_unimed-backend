@@ -20,48 +20,72 @@ def force_db_indexes(db: Session = Depends(get_db)):
         print(msg)
         web_log.append(msg)
 
-    log("🔌 Starting Remote Index Verification...")
+    log("🔌 Starting Senior-Level Performance Optimization...")
     
+    # 1. Enable pg_trgm for fast text search
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+            conn.commit()
+            log("✅ Extension 'pg_trgm' ensured.")
+    except Exception as e:
+        log(f"⚠️ Could not ensure 'pg_trgm': {e}")
+
+    # 2. Advanced Index Definition
+    # Format: (name, table, column, type) -- type can be 'gin' for trigrams
     indexes_to_check = [
-        ("idx_patient_pei_status", "patient_pei", "status"),
-        ("idx_patient_pei_validade", "patient_pei", "validade"),
-        ("idx_patient_pei_base_guia", "patient_pei", "base_guia_id"),
-        ("idx_patient_pei_updated_at", "patient_pei", "updated_at"),
-        ("idx_base_guias_carteirinha", "base_guias", "carteirinha_id"),
-        ("ix_jobs_status", "jobs", "status"),
-        ("idx_carteirinhas_paciente", "carteirinhas", "paciente"),
-        ("idx_carteirinhas_carteirinha", "carteirinhas", "carteirinha"),
-        ("idx_users_api_key_manual", "users", "api_key")
+        # Search Optimizations (Trigrams - GIN)
+        ("trgm_idx_carteirinhas_paciente", "carteirinhas", "paciente", "USING gin (paciente gin_trgm_ops)"),
+        ("trgm_idx_carteirinhas_numero", "carteirinhas", "carteirinha", "USING gin (carteirinha gin_trgm_ops)"),
+        
+        # Ordering & Filtering Optimizations (B-tree)
+        ("idx_base_guias_created_at", "base_guias", "created_at", "(created_at DESC)"),
+        ("idx_base_guias_updated_at", "base_guias", "updated_at", "(updated_at DESC)"),
+        ("idx_patient_pei_updated_at_desc", "patient_pei", "updated_at", "(updated_at DESC)"),
+        ("idx_patient_pei_status_order", "patient_pei", "status", "(status)"),
+        
+        # Foreign Keys (Join performance)
+        ("idx_jobs_carteirinha_id", "jobs", "carteirinha_id", "(carteirinha_id)"),
+        ("idx_base_guias_carteirinha_id", "base_guias", "carteirinha_id", "(carteirinha_id)"),
+        ("idx_patient_pei_carteirinha_id", "patient_pei", "carteirinha_id", "(carteirinha_id)"),
+        
+        # Legacy/Essential checks
+        ("ix_jobs_status", "jobs", "status", "(status)"),
+        ("idx_carteirinhas_id_pagamento", "carteirinhas", "id_pagamento", "(id_pagamento)")
     ]
 
     try:
-        # We use the raw engine connection to avoid transaction nesting issues if any,
-        # though inside a route we are usually in a transaction.
-        # Ideally we want autocommit for CREATE INDEX concurrently if possible, 
-        # but standard CREATE INDEX is fine.
-        
         with engine.connect() as conn:
-            # Commit any pending transaction
             conn.commit()
             
-            for idx_name, table, col in indexes_to_check:
+            for idx_name, table, col, idx_def in indexes_to_check:
                 check_sql = text(f"SELECT 1 FROM pg_indexes WHERE indexname = '{idx_name}'")
                 exists = conn.execute(check_sql).fetchone()
                 
                 if exists:
-                    log(f"✅ Index '{idx_name}' exists.")
+                    log(f"✅ Index '{idx_name}' already exists.")
                 else:
                     log(f"⚠️ Index '{idx_name}' MISSING. Creating...")
                     try:
-                        create_sql = text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({col})")
-                        conn.execute(create_sql)
-                        # Commit immediately
+                        # Construct CREATE INDEX SQL
+                        # If idx_def starts with 'USING', it's a specialized index type
+                        if idx_def.startswith("USING"):
+                            sql = f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} {idx_def}"
+                        else:
+                            sql = f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} {idx_def}"
+                        
+                        conn.execute(text(sql))
                         conn.commit()
                         log(f"   ✅ Created '{idx_name}'")
                     except Exception as e:
-                        log(f"   ❌ Failed to create '{idx_name}': {str(e)}")
-                        # Rollback in case of error to proceed to next
+                        log(f"   ❌ Failed '{idx_name}': {str(e)}")
                         conn.rollback()
+
+            # 3. Optimize DB Statistics
+            log("📊 Running ANALYZE to optimize query planner...")
+            conn.execute(text("ANALYZE"))
+            conn.commit()
+            log("✅ Database statistics updated.")
 
     except Exception as e:
         log(f"❌ Critical Error: {str(e)}")
@@ -73,6 +97,6 @@ def force_db_indexes(db: Session = Depends(get_db)):
 
     return {
         "status": "success",
-        "message": "Optimization complete",
+        "message": "Advanced Optimization Complete",
         "log": web_log
     }
