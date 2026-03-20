@@ -1,11 +1,21 @@
+import time
 from fastapi import FastAPI
-# Trigger Redeploy
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base
 from routes import auth, carteirinhas, jobs, guias, logs, dashboard, debug_optimization
 
-# Create tables
-Base.metadata.create_all(bind=engine)
+# Create tables — retry on temporary DB unavailability (e.g. Supabase instability)
+for _attempt in range(3):
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("[startup] DB tables verified OK.")
+        break
+    except Exception as _e:
+        print(f"[startup] DB not available (attempt {_attempt + 1}/3): {_e}")
+        if _attempt < 2:
+            time.sleep(5)
+        else:
+            print("[startup] Could not reach DB at startup — continuing anyway.")
 
 app = FastAPI(title="Base Guias Unimed API", version="1.0.0")
 

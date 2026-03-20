@@ -28,9 +28,20 @@ if not SQLALCHEMY_DATABASE_URL:
 
 # Disable prepared statements for Supabase Transaction Pooler (port 6543) support
 engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, 
+    SQLALCHEMY_DATABASE_URL,
     pool_pre_ping=True,
-    connect_args={"prepare_threshold": None} 
+    pool_recycle=300,       # recycle connections every 5 min to avoid stale SSL
+    pool_size=5,
+    max_overflow=10,
+    pool_timeout=30,
+    connect_args={
+        "prepare_threshold": None,   # required for Supabase Transaction Pooler
+        "connect_timeout": 10,       # fail fast on unreachable DB
+        "keepalives": 1,             # enable TCP keepalives
+        "keepalives_idle": 30,       # send keepalive after 30s idle
+        "keepalives_interval": 10,   # retry every 10s
+        "keepalives_count": 5,       # drop connection after 5 failed keepalives
+    }
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
