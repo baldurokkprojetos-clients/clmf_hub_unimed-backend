@@ -17,7 +17,7 @@ for _attempt in range(3):
         else:
             print("[startup] Could not reach DB at startup — continuing anyway.")
 
-app = FastAPI(title="Base Guias Unimed API", version="1.0.0")
+app = FastAPI(title="Base Guias Unimed API", version="1.0.0", redirect_slashes=False)
 
 # Configure CORS
 origins = [

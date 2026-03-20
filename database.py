@@ -2,7 +2,6 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
@@ -17,13 +16,18 @@ SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
 if not SQLALCHEMY_DATABASE_URL:
     SQLALCHEMY_DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
-# Supabase Transaction Pooler (port 6543) manages connections itself.
-# Using SQLAlchemy's QueuePool on top causes double-pooling → pool exhaustion.
-# NullPool: open/close per request; Supabase handles reuse internally.
-# This eliminates QueuePool limit errors and stale SSL connection issues.
+# Supabase Transaction Pooler (port 6543) + small persistent pool.
+# NullPool was causing 400-600ms overhead per request (new TCP/SSL each time).
+# Using a small pool (size=2 + overflow=3 = max 5 connections) for performance
+# while staying well within Supabase's free tier connection limit.
+# pool_recycle=120s prevents stale connections from Supabase idle timeouts.
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
-    poolclass=NullPool,
+    pool_pre_ping=True,
+    pool_recycle=120,
+    pool_size=2,
+    max_overflow=3,
+    pool_timeout=20,
     connect_args={
         "prepare_threshold": None,   # required for Supabase Transaction Pooler
         "connect_timeout": 10,       # fail fast if DB unreachable
