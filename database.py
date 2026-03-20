@@ -16,21 +16,18 @@ SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
 if not SQLALCHEMY_DATABASE_URL:
     SQLALCHEMY_DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
-# Supabase Transaction Pooler (port 6543) + small persistent pool.
-# NullPool was causing 400-600ms overhead per request (new TCP/SSL each time).
-# Using a small pool (size=2 + overflow=3 = max 5 connections) for performance
-# while staying well within Supabase's free tier connection limit.
-# pool_recycle=120s prevents stale connections from Supabase idle timeouts.
+# Supabase Session Pooler (port 5432) via IPv4 proxy.
+# Session mode behaves more like a direct connection and is IPv4 compatible.
+# Using a larger pool size for improved performance in persistent web apps.
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
-    pool_pre_ping=True,
-    pool_recycle=120,
-    pool_size=2,
-    max_overflow=3,
-    pool_timeout=20,
+    pool_pre_ping=True,        # Testa conexão antes de cada uso
+    pool_recycle=1800,         # Recicla a cada 30min
+    pool_size=10,               # Aumentado para performance
+    max_overflow=20,           # Buffer para transbordamento
+    pool_timeout=30,
     connect_args={
-        "prepare_threshold": None,   # required for Supabase Transaction Pooler
-        "connect_timeout": 10,       # fail fast if DB unreachable
+        "connect_timeout": 10,  # Fail fast se o DB estiver fora do ar
         "keepalives": 1,
         "keepalives_idle": 30,
         "keepalives_interval": 10,
