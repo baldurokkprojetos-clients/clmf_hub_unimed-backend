@@ -73,6 +73,7 @@ class BaseGuia(Base):
     codigo_terapia = Column(Text, index=True)
     qtde_solicitada = Column(Integer)
     sessoes_autorizadas = Column(Integer)
+    valida_prestador = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), index=True)
 

@@ -56,7 +56,7 @@ def export_guias(
         ws = wb.create_sheet("Guias")
         
         headers = ["Carteirinha", "Paciente", "Guia", "Data_Autorização", "Senha", 
-                   "Validade", "Código_Terapia", "Qtde_Solicitada", "Sessões Autorizadas", "Importado_Em"]
+                   "Validade", "Código_Terapia", "Status Prestador", "Qtde_Solicitada", "Sessões Autorizadas", "Importado_Em"]
         ws.append(headers)
         
         # Helper to format date
@@ -76,7 +76,8 @@ def export_guias(
             BaseGuia.codigo_terapia,         # 6
             BaseGuia.qtde_solicitada,        # 7
             BaseGuia.sessoes_autorizadas,    # 8
-            BaseGuia.created_at              # 9
+            BaseGuia.created_at,             # 9
+            BaseGuia.valida_prestador        # 10
         ).select_from(BaseGuia).join(Carteirinha, BaseGuia.carteirinha_id == Carteirinha.id)
 
         if created_at_start:
@@ -101,6 +102,7 @@ def export_guias(
                 row.senha,
                 fmt_date(row.validade),
                 row.codigo_terapia,
+                row.valida_prestador.get("Vinculo_prestador") if row.valida_prestador else "",
                 row.qtde_solicitada,
                 row.sessoes_autorizadas,
                 row.created_at.strftime("%d/%m/%Y %H:%M:%S") if row.created_at else ""
