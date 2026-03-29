@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from models import BaseGuia, PeiTemp, PatientPei
 from datetime import timedelta, date
 
-def update_patient_pei(db: Session, carteirinha_id: int, codigo_terapia: str, guia_instance: BaseGuia = None):
+def update_patient_pei(db: Session, carteirinha_id: int, codigo_procedimento: str, guia_instance: BaseGuia = None):
     """
     Recalculates and updates the PatientPei record for a specific patient and therapy.
     Triggered automatically by changes in BaseGuia or PeiTemp.
@@ -13,7 +13,7 @@ def update_patient_pei(db: Session, carteirinha_id: int, codigo_terapia: str, gu
     
     db_latest = db.query(BaseGuia).filter(
         BaseGuia.carteirinha_id == carteirinha_id,
-        BaseGuia.codigo_terapia == codigo_terapia
+        BaseGuia.codigo_procedimento == codigo_procedimento
     ).order_by(BaseGuia.data_autorizacao.desc(), BaseGuia.id.desc()).first()
     
     latest_guia = db_latest
@@ -97,13 +97,13 @@ def update_patient_pei(db: Session, carteirinha_id: int, codigo_terapia: str, gu
     # 3. Update or Create PatientPei Record
     patient_pei = db.query(PatientPei).filter(
         PatientPei.carteirinha_id == carteirinha_id,
-        PatientPei.codigo_terapia == codigo_terapia
+        PatientPei.codigo_procedimento == codigo_procedimento
     ).first()
 
     if not patient_pei:
         patient_pei = PatientPei(
             carteirinha_id=carteirinha_id,
-            codigo_terapia=codigo_terapia
+            codigo_procedimento=codigo_procedimento
         )
         db.add(patient_pei)
     

@@ -70,7 +70,7 @@ class BaseGuia(Base):
     data_autorizacao = Column(Date, index=True)
     senha = Column(Text)
     validade = Column(Date, index=True)
-    codigo_terapia = Column(Text, index=True)
+    codigo_procedimento = Column(Text, index=True)
     qtde_solicitada = Column(Integer)
     sessoes_autorizadas = Column(Integer)
     valida_prestador = Column(JSON, nullable=True)
@@ -93,7 +93,7 @@ class PatientPei(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     carteirinha_id = Column(Integer, ForeignKey("carteirinhas.id", ondelete="CASCADE"), index=True)
-    codigo_terapia = Column(Text, index=True)
+    codigo_procedimento = Column(Text, index=True)
     
     base_guia_id = Column(Integer, ForeignKey("base_guias.id", ondelete="CASCADE"), index=True)
     
@@ -136,6 +136,18 @@ class Worker(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     current_job = relationship("Job")
+
+class Procedimento(Base):
+    __tablename__ = "procedimentos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    id_convenio = Column(Integer, index=True)
+    nome = Column(Text, nullable=False)
+    codigo_procedimento = Column(Text, index=True)
+    autorizacao = Column(Text)
+    status = Column(Text, default="ativo")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 # Update relationships in Job and Carteirinha (monkey-patching or manual update below)
 # We need to add 'logs' relationship to Job and Carteirinha classes above.

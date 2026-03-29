@@ -73,7 +73,7 @@ def export_guias(
             BaseGuia.data_autorizacao,       # 3
             BaseGuia.senha,                  # 4
             BaseGuia.validade,               # 5
-            BaseGuia.codigo_terapia,         # 6
+            BaseGuia.codigo_procedimento,   # 6
             BaseGuia.qtde_solicitada,        # 7
             BaseGuia.sessoes_autorizadas,    # 8
             BaseGuia.created_at,             # 9
@@ -101,7 +101,7 @@ def export_guias(
                 fmt_date(row.data_autorizacao),
                 row.senha,
                 fmt_date(row.validade),
-                row.codigo_terapia,
+                row.codigo_procedimento,
                 row.valida_prestador.get("Vinculo_prestador") if row.valida_prestador else "",
                 row.qtde_solicitada,
                 row.sessoes_autorizadas,

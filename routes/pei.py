@@ -29,7 +29,7 @@ def apply_filters(query, search, status, validade_start, validade_end, venciment
             or_(
                 Carteirinha.paciente.ilike(search_term),
                 Carteirinha.carteirinha.ilike(search_term),
-                PatientPei.codigo_terapia.ilike(search_term)
+                PatientPei.codigo_procedimento.ilike(search_term)
             )
         )
     
@@ -115,7 +115,7 @@ def list_pei(
         PatientPei.carteirinha_id,
         Carteirinha.carteirinha,
         Carteirinha.paciente,
-        PatientPei.codigo_terapia,
+        PatientPei.codigo_procedimento,
         PatientPei.pei_semanal,
         PatientPei.validade,
         PatientPei.status,
@@ -142,7 +142,7 @@ def list_pei(
             "carteirinha_id": row.carteirinha_id,
             "carteirinha": row.carteirinha or "",
             "paciente": row.paciente or "",
-            "codigo_terapia": row.codigo_terapia,
+            "codigo_procedimento": row.codigo_procedimento,
             "pei_semanal": row.pei_semanal,
             "validade": row.validade,
             "status": row.status,
@@ -220,7 +220,7 @@ def export_pei(
                     row.carteirinha_rel.paciente if row.carteirinha_rel else "",
                     row.carteirinha_rel.carteirinha if row.carteirinha_rel else "",
                     id_pagamento_val,
-                    row.codigo_terapia,
+                    row.codigo_procedimento,
                     guia_num,
                     data_auth.strftime("%d/%m/%Y") if data_auth else "",
                     senha,
@@ -286,7 +286,7 @@ def export_pei(
             Carteirinha.paciente,             # 1
             Carteirinha.carteirinha,          # 2
             Carteirinha.id_pagamento,         # 3 - REQUESTED FIELD
-            PatientPei.codigo_terapia,        # 4
+            PatientPei.codigo_procedimento,        # 4
             BaseGuia.guia,                    # 5
             BaseGuia.data_autorizacao,        # 6
             BaseGuia.senha,                   # 7
@@ -325,7 +325,7 @@ def export_pei(
                 row.paciente or "",                     # Paciente
                 row.carteirinha or "",                  # Carteirinha
                 row.id_pagamento or "",                 # ID Pagamento (Direct from select)
-                row.codigo_terapia,                     # Codigo Terapia
+                row.codigo_procedimento,                     # Codigo Procedimento
                 row.guia or "-",                        # Guia
                 fmt(row.data_autorizacao),              # Data Auth
                 row.senha or "-",                       # Senha
