@@ -38,7 +38,7 @@ def create_all_jobs(db: Session) -> int:
         
     return len(new_jobs)
 
-def create_temp_job(db: Session, carteirinha: str, paciente: str) -> int:
+def create_temp_job(db: Session, carteirinha: str, paciente: str, id_pagamento: Optional[int] = None) -> int:
     """
     Creates a temporary patient and job.
     """
@@ -51,6 +51,8 @@ def create_temp_job(db: Session, carteirinha: str, paciente: str) -> int:
         if existing.is_temporary:
             existing.expires_at = datetime.utcnow() + timedelta(hours=1)
             existing.paciente = paciente # Update name just in case
+            if id_pagamento:
+                existing.id_pagamento = id_pagamento
         cart_id = existing.id
     else:
         # Create new temporary patient
@@ -60,6 +62,7 @@ def create_temp_job(db: Session, carteirinha: str, paciente: str) -> int:
             carteirinha=carteirinha,
             paciente=paciente,
             id_paciente=fake_id_paciente,
+            id_pagamento=id_pagamento,
             is_temporary=True,
             expires_at=datetime.utcnow() + timedelta(hours=1)
         )

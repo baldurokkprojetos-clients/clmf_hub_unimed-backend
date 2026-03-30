@@ -15,6 +15,7 @@ router = APIRouter(
 class TemporaryPatientData(BaseModel):
     carteirinha: str
     paciente: str
+    id_pagamento: Optional[int] = None
 
 class CreateJobRequest(BaseModel):
     type: str # 'single', 'multiple', 'all', 'temp'
@@ -43,7 +44,13 @@ def create_jobs(
         if not request.temp_patient:
              raise HTTPException(status_code=400, detail="temp_patient data required for temp job")
              
-        created_count = job_service.create_temp_job(db, request.temp_patient.carteirinha, request.temp_patient.paciente)
+              
+        created_count = job_service.create_temp_job(
+            db, 
+            request.temp_patient.carteirinha, 
+            request.temp_patient.paciente,
+            request.temp_patient.id_pagamento
+        )
                 
     else:
         raise HTTPException(status_code=400, detail="Invalid job type")
