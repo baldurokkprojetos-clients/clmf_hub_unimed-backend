@@ -16,10 +16,7 @@ def update_patient_pei(db: Session, carteirinha_id: int, codigo_procedimento: st
     db_latest = db.query(BaseGuia).filter(
         BaseGuia.carteirinha_id == carteirinha_id,
         BaseGuia.codigo_procedimento == codigo_procedimento,
-        or_(
-            BaseGuia.valida_prestador == None,
-            text("valida_prestador->>'Vinculo_prestador' = 'Guia Válida'")
-        )
+        text("valida_prestador->>'Vinculo_prestador' = 'Guia Válida'")
     ).order_by(BaseGuia.data_autorizacao.desc(), BaseGuia.id.desc()).first()
     
     latest_guia = db_latest
