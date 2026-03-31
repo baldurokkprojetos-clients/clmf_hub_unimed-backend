@@ -11,41 +11,51 @@ def update_patient_pei(db: Session, carteirinha_id: int, codigo_procedimento: st
     # Logic: Newest data_autorizacao, then newest ID (tie-breaker)
     # Note: If valid_instance is provided (from before_flush), we must consider it.
     
+    from sqlalchemy import or_, text
+    
     db_latest = db.query(BaseGuia).filter(
         BaseGuia.carteirinha_id == carteirinha_id,
-        BaseGuia.codigo_procedimento == codigo_procedimento
+        BaseGuia.codigo_procedimento == codigo_procedimento,
+        or_(
+            BaseGuia.valida_prestador == None,
+            text("valida_prestador->>'Vinculo_prestador' = 'Guia Válida'")
+        )
     ).order_by(BaseGuia.data_autorizacao.desc(), BaseGuia.id.desc()).first()
     
     latest_guia = db_latest
 
     if guia_instance:
-        # Compare db_latest and guia_instance to see which is newer.
-        # ID might be None for guia_instance (if insert). 
-        # But usually we assume the one being touched is the "latest" content-wise if dates match?
-        # Let's simplify: append to list and sort.
-        candidate_list = []
-        if db_latest:
-            candidate_list.append(db_latest)
+        # Check if guia_instance itself is blocked
+        is_blocked = False
+        if guia_instance.valida_prestador:
+            vinculo = guia_instance.valida_prestador.get("Vinculo_prestador")
+            if vinculo and vinculo != "Guia Válida":
+                is_blocked = True
         
-        # Check if guia_instance is already db_latest (if we queried it back?)
-        # If in before_flush, db_latest from query might be None or old.
-        if guia_instance not in candidate_list:
-            candidate_list.append(guia_instance)
+        if not is_blocked:
+            # Compare db_latest and guia_instance to see which is newer.
+            candidate_list = []
+            if db_latest:
+                candidate_list.append(db_latest)
             
-        # Sort logic
-        def sort_key(g):
-            d = g.data_autorizacao or date.min
-            # ID might be None. Use infinity or 0? 
-            # If ID is None, it's very new (pending insert). Treat as highest ID?
-            i = g.id if g.id is not None else float('inf')
-            return (d, i)
-            
-        candidate_list.sort(key=sort_key, reverse=True)
-        latest_guia = candidate_list[0] if candidate_list else None
+            if guia_instance not in candidate_list:
+                candidate_list.append(guia_instance)
+                
+            # Sort logic
+            def sort_key(g):
+                d = g.data_autorizacao or date.min
+                i = g.id if g.id is not None else float('inf')
+                return (d, i)
+                
+            candidate_list.sort(key=sort_key, reverse=True)
+            latest_guia = candidate_list[0] if candidate_list else None
 
     if not latest_guia:
-        # If no guia exists anymore (e.g. deleted), we might need to remove the PEI or set to 0. 
-        # For now, we just return.
+        # If no valid guia exists anymore, remove the PEI entry
+        db.query(PatientPei).filter(
+            PatientPei.carteirinha_id == carteirinha_id,
+            PatientPei.codigo_procedimento == codigo_procedimento
+        ).delete()
         return
 
 
