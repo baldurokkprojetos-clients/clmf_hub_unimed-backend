@@ -38,7 +38,7 @@ BEGIN
     FROM base_guias
     WHERE carteirinha_id = target_carteirinha_id 
       AND codigo_procedimento = target_codigo_procedimento
-      AND (valida_prestador->>'Vinculo_prestador' = 'Guia Válida')
+      AND (valida_prestador->>'Vinculo_prestador' LIKE 'Guia V%lida')
     ORDER BY data_autorizacao DESC, id DESC
     LIMIT 1;
 
