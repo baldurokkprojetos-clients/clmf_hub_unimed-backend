@@ -42,3 +42,11 @@ async def get_current_user(authorization: str = Header(None), db: Session = Depe
         )
         
     return user
+
+async def get_protocolo_user(current_user: User = Depends(get_current_user)):
+    if not current_user.permitir_protocolo:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Usuário não possui permissão para acessar o módulo Protocolo Fichas."
+        )
+    return current_user

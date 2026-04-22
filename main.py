@@ -2,7 +2,7 @@ import time
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base
-from routes import auth, carteirinhas, jobs, guias, logs, dashboard, debug_optimization
+from routes import auth, carteirinhas, jobs, guias, logs, dashboard, debug_optimization, protocolo
 
 # Create tables — retry on temporary DB unavailability (e.g. Supabase instability)
 for _attempt in range(3):
@@ -70,3 +70,4 @@ app.include_router(workers.router)
 from routes import pei
 app.include_router(pei.router)
 app.include_router(debug_optimization.router)
+app.include_router(protocolo.router)

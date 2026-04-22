@@ -37,5 +37,6 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
     return {
         "token": user.api_key, # Simple token for now, or could use JWT
         "username": user.username,
-        "validade": user.validade
+        "validade": user.validade,
+        "permitir_protocolo": user.permitir_protocolo
     }

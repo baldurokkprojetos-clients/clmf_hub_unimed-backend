@@ -11,6 +11,7 @@ class User(Base):
     api_key = Column(Text, unique=True, nullable=False)
     status = Column(Text, nullable=False) # Ativo, Inativo
     validade = Column(Date)
+    permitir_protocolo = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -154,6 +155,56 @@ class Procedimento(Base):
 # Ideally I should have edited the classes. I will use a second tool call or try to match nicely.
 # Actually I can't easily monkeypatch via replace inside the file text easily if I don't touch the classes.
 # I will rewrite the file segments for Job and Carteirinha to include 'logs = relationship(...)'
+
+
+class ProtocoloLote(Base):
+    """Batch (lote) of PDF files for extraction processing."""
+    __tablename__ = "protocolo_lotes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    status = Column(Text, nullable=False, default="pending", index=True)  # pending, processing, completed, error
+    total_arquivos = Column(Integer, default=0)
+    total_processado = Column(Integer, default=0)
+    total_erro = Column(Integer, default=0)
+    total_sucesso = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    arquivos = relationship("ProtocoloArquivo", back_populates="lote_rel", cascade="all, delete-orphan")
+
+
+class ProtocoloArquivo(Base):
+    """Individual PDF file within a processing batch."""
+    __tablename__ = "protocolo_arquivos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    lote_id = Column(Integer, ForeignKey("protocolo_lotes.id", ondelete="CASCADE"), nullable=False, index=True)
+    nome_original = Column(Text, nullable=False)
+    nome_final = Column(Text)
+    status = Column(Text, nullable=False, default="pendente", index=True)  # pendente, processando, sucesso, erro, revisao
+    tamanho_bytes = Column(Integer, default=0)
+
+    # Extracted data from Gemini
+    numero_guia_prestador = Column(Text)
+    nome_beneficiario = Column(Text)
+    numero_guia_principal = Column(Text)
+    atendimentos = Column(JSON, nullable=True)  # [{data, assinatura}, ...]
+
+    # Post-processing data
+    guia_normalizada = Column(Text)
+    erro_mensagem = Column(Text)
+    gemini_model_used = Column(Text)
+    gemini_api_key_index = Column(Integer)
+
+    # Physical file paths
+    caminho_original = Column(Text)
+    caminho_final = Column(Text)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    lote_rel = relationship("ProtocoloLote", back_populates="arquivos")
 
 
 # Event Listeners for Automatic PEI Calculation
