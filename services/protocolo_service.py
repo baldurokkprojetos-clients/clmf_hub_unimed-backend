@@ -46,19 +46,33 @@ def _get_gemini_client():
 
 
 def recalculate_lote_totals(db: Session, lote_id: int):
-    """Force recalculate all totals for a lote from its arquivos."""
+    """Force recalculate all totals for a lote from its arquivos using optimized SQL queries."""
     from models import ProtocoloLote, ProtocoloArquivo
+    from sqlalchemy import func
     
     lote = db.query(ProtocoloLote).filter(ProtocoloLote.id == lote_id).first()
     if not lote:
         return
 
-    arquivos = db.query(ProtocoloArquivo).filter(ProtocoloArquivo.lote_id == lote_id).all()
+    # Aggregate counts in a single query if possible, or simple separate count queries
+    counts = db.query(
+        ProtocoloArquivo.status,
+        func.count(ProtocoloArquivo.id)
+    ).filter(ProtocoloArquivo.lote_id == lote_id).group_by(ProtocoloArquivo.status).all()
     
-    lote.total_arquivos = len(arquivos)
-    lote.total_sucesso = sum(1 for a in arquivos if a.status == "sucesso")
-    lote.total_erro = sum(1 for a in arquivos if a.status in ["erro", "falha", "revisao"])
-    lote.total_processado = sum(1 for a in arquivos if a.status != "pendente" and a.status != "processando")
+    status_map = dict(counts)
+    
+    lote.total_arquivos = sum(status_map.values())
+    lote.total_sucesso = status_map.get("sucesso", 0)
+    lote.total_erro = (
+        status_map.get("erro", 0) + 
+        status_map.get("falha", 0) + 
+        status_map.get("revisao", 0)
+    )
+    lote.total_processado = sum(
+        count for status, count in status_map.items() 
+        if status not in ["pendente", "processando"]
+    )
     
     db.commit()
 

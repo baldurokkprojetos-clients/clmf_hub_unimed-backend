@@ -111,9 +111,12 @@ def get_lote_status(
     """Get detailed status of a lote and its files. Forces a recalculation of totals to ensure accuracy."""
     from services.protocolo_service import get_lote_status as svc_status
     from services.protocolo_service import recalculate_lote_totals
-
-    # Recalculate to fix any inconsistent counters from previous versions
-    recalculate_lote_totals(db, lote_id)
+    from models import ProtocoloLote
+    
+    # Recalculate only if still active
+    lote_basic = db.query(ProtocoloLote.id, ProtocoloLote.status).filter(ProtocoloLote.id == lote_id).first()
+    if lote_basic and lote_basic.status not in ["completed", "cancelled"]:
+        recalculate_lote_totals(db, lote_id)
 
     result = svc_status(db, lote_id)
     if not result:

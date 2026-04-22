@@ -162,13 +162,13 @@ class ProtocoloLote(Base):
     __tablename__ = "protocolo_lotes"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     status = Column(Text, nullable=False, default="pending", index=True)  # pending, processing, completed, error
     total_arquivos = Column(Integer, default=0)
     total_processado = Column(Integer, default=0)
     total_erro = Column(Integer, default=0)
     total_sucesso = Column(Integer, default=0)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     arquivos = relationship("ProtocoloArquivo", back_populates="lote_rel", cascade="all, delete-orphan")
@@ -201,7 +201,7 @@ class ProtocoloArquivo(Base):
     caminho_original = Column(Text)
     caminho_final = Column(Text)
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     lote_rel = relationship("ProtocoloLote", back_populates="arquivos")
