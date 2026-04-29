@@ -41,6 +41,24 @@ async def get_current_user(authorization: str = Header(None), db: Session = Depe
             detail="Chave de acesso vencida."
         )
         
+    # Auto-logout check: 20 minutes of inactivity
+    from datetime import timezone, timedelta
+    
+    now_utc = datetime.now(timezone.utc)
+    
+    if user.last_activity:
+        # Check if difference is more than 20 minutes
+        if now_utc - user.last_activity > timedelta(minutes=20):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Sessão expirada por inatividade. Faça login novamente."
+            )
+            
+    # Throttle DB updates: only update if last_activity is empty or older than 1 minute
+    if not user.last_activity or now_utc - user.last_activity > timedelta(minutes=1):
+        user.last_activity = now_utc
+        db.commit()
+        
     return user
 
 async def get_protocolo_user(current_user: User = Depends(get_current_user)):

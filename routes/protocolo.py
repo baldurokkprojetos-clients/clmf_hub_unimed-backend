@@ -108,16 +108,16 @@ def get_lote_status(
     db: Session = Depends(get_db),
     current_user=Depends(get_protocolo_user),
 ):
-    """Get detailed status of a lote and its files. Forces a recalculation of totals to ensure accuracy."""
+    """Get detailed status of a lote and its files."""
     from services.protocolo_service import get_lote_status as svc_status
     from services.protocolo_service import recalculate_lote_totals
     from models import ProtocoloLote
     
-    # Recalculate only if still active
+    # Recalculate only if still active (processing or pending)
     lote_basic = db.query(ProtocoloLote.id, ProtocoloLote.status).filter(ProtocoloLote.id == lote_id).first()
-    if lote_basic and lote_basic.status not in ["completed", "cancelled"]:
+    if lote_basic and lote_basic.status in ["pending", "processing"]:
         recalculate_lote_totals(db, lote_id)
-
+    
     result = svc_status(db, lote_id)
     if not result:
         raise HTTPException(status_code=404, detail="Lote não encontrado")

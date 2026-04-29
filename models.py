@@ -12,6 +12,7 @@ class User(Base):
     status = Column(Text, nullable=False) # Ativo, Inativo
     validade = Column(Date)
     permitir_protocolo = Column(Boolean, default=False)
+    last_activity = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

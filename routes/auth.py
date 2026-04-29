@@ -34,6 +34,10 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
             detail="Chave está vencida. Contratar nova."
         )
 
+    from datetime import timezone
+    user.last_activity = datetime.now(timezone.utc)
+    db.commit()
+
     return {
         "token": user.api_key, # Simple token for now, or could use JWT
         "username": user.username,
