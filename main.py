@@ -24,12 +24,27 @@ origins = [
     "http://localhost:3000",
     "http://localhost:5173",
     "https://clmf-gestor.vercel.app",
-    "https://clmf-hub-unimed-frontend.vercel.app"
+    "https://clmf-hub-unimed-frontend.vercel.app",
+    "https://base-guias-frontend.vercel.app",
+    "https://base-guias-frontend-*.vercel.app",
 ]
+
+import re
+
+def is_allowed_origin(origin: str) -> bool:
+    """Check if origin matches allowed patterns (including Vercel preview URLs)."""
+    # Exact match
+    if origin in origins:
+        return True
+    # Allow all *.vercel.app subdomains
+    if re.match(r'https://[a-z0-9-]+-[a-z0-9-]+\.vercel\.app$', origin):
+        return True
+    return False
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=r'https://.*\.vercel\.app',
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
