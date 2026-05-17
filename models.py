@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, Text, Float, Boolean, JSON
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
@@ -16,6 +17,17 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+class UserConvenio(Base):
+    """Credenciais de acesso por usuário x convênio."""
+    __tablename__ = "user_convenios"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
+    id_convenio = Column(Integer, ForeignKey("convenios.id", ondelete="CASCADE"))
+    login = Column(Text, nullable=True)
+    senha_criptografada = Column(Text, nullable=True)
+
+
 class Convenio(Base):
     __tablename__ = "convenios"
 
@@ -25,7 +37,7 @@ class Convenio(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    # carteirinhas = relationship("Carteirinha", back_populates="convenio_rel")
+    user_convenios_rel = relationship("UserConvenio", foreign_keys=[UserConvenio.id_convenio], cascade="all, delete-orphan")
 
 class Carteirinha(Base):
     __tablename__ = "carteirinhas"
@@ -51,10 +63,12 @@ class Job(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     carteirinha_id = Column(Integer, ForeignKey("carteirinhas.id", ondelete="CASCADE"))
-    status = Column(Text, nullable=False, default="pending", index=True) # success, pending, processing, error
+    rotina = Column(Text, nullable=True, index=True)     # ex: 'clmf_atualizar_rc'
+    params = Column(JSONB, nullable=True)                # parâmetros arbitrários do job
+    status = Column(Text, nullable=False, default="pending", index=True)  # success, pending, processing, error
     attempts = Column(Integer, default=0)
     priority = Column(Integer, default=0)
-    locked_by = Column(Text) # Server URL
+    locked_by = Column(Text)  # Server URL
     timeout = Column(DateTime(timezone=True))
     valida_prestador = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
