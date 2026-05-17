@@ -11,18 +11,13 @@ CREATE TABLE IF NOT EXISTS user_convenios (
     UNIQUE (user_id, id_convenio)
 );
 
--- Seed: vincular o usuário 'Clinica Larissa Martins Ferreira'
--- ao convênio CLMF com as credenciais de acesso.
--- IMPORTANTE: substituir <SENHA_CRIPTOGRAFADA> pela senha cifrada
--- via security_utils antes de executar em produção.
+-- Seed: vincular usuário principal ao convênio CLMF com credenciais.
+-- Idempotente via UNIQUE(user_id, id_convenio).
+-- TODO: substituir senha em texto puro por versão criptografada antes do deploy.
 INSERT INTO user_convenios (user_id, id_convenio, login, senha_criptografada)
-SELECT
-    u.id,
-    c.id,
-    'diogomat11@hotmail.com',
-    'Arju2020@'          -- TODO: criptografar com security_utils antes do deploy
+SELECT u.id, c.id, 'diogomat11@hotmail.com', 'Arju2020@'
 FROM users u
 CROSS JOIN convenios c
-WHERE u.username ILIKE '%Larissa%'
+WHERE u.id = (SELECT MIN(id) FROM users WHERE username LIKE '%Larissa%')
   AND c.nome = 'CLMF'
-ON CONFLICT DO NOTHING;
+ON CONFLICT (user_id, id_convenio) DO NOTHING;
