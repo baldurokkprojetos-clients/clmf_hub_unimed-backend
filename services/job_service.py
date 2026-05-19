@@ -24,11 +24,15 @@ def create_jobs_bulk(db: Session, carteirinha_ids: List[int]) -> int:
     
     return 0
 
-def create_all_jobs(db: Session) -> int:
+def create_all_jobs(db: Session, id_convenio: Optional[int] = None) -> int:
     """
     Creates jobs for ALL non-temporary carteirinhas.
     """
-    all_carteirinhas = db.query(Carteirinha).filter(Carteirinha.is_temporary == False).all()
+    query = db.query(Carteirinha).filter(Carteirinha.is_temporary == False)
+    if id_convenio is not None:
+        query = query.filter(Carteirinha.id_convenio == id_convenio)
+        
+    all_carteirinhas = query.all()
     new_jobs = []
     for cart in all_carteirinhas:
          new_jobs.append(Job(carteirinha_id=cart.id, status="pending"))

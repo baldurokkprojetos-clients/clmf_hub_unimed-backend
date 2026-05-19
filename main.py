@@ -69,9 +69,57 @@ async def run_cleanup_loop():
         
         await asyncio.sleep(600) # Run every 10 minutes
 
+from datetime import datetime
+
+last_cron_date_clear = None
+last_cron_date_jobs = None
+
+async def run_unimed_cron_loop():
+    global last_cron_date_clear, last_cron_date_jobs
+    while True:
+        try:
+            now = datetime.now()
+            
+            # 20:00 - Limpar Guias e PEI
+            if now.hour == 20 and now.minute == 0 and last_cron_date_clear != now.date():
+                db = SessionLocal()
+                from models import Convenio, Carteirinha, BaseGuia, PatientPei, PeiTemp
+                unimed = db.query(Convenio).filter(Convenio.nome.ilike('%Unimed Goiania%')).first()
+                if unimed:
+                    cart_ids = [c.id for c in db.query(Carteirinha.id).filter(Carteirinha.id_convenio == unimed.id).all()]
+                    if cart_ids:
+                        guia_ids = [g.id for g in db.query(BaseGuia.id).filter(BaseGuia.carteirinha_id.in_(cart_ids)).all()]
+                        if guia_ids:
+                            db.query(PeiTemp).filter(PeiTemp.base_guia_id.in_(guia_ids)).delete(synchronize_session=False)
+                        db.query(PatientPei).filter(PatientPei.carteirinha_id.in_(cart_ids)).delete(synchronize_session=False)
+                        db.query(BaseGuia).filter(BaseGuia.carteirinha_id.in_(cart_ids)).delete(synchronize_session=False)
+                        db.commit()
+                        print(f"CRON (20:00): Guias e PEI limpos para Unimed Goiania.")
+                db.close()
+                last_cron_date_clear = now.date()
+                
+            # 20:01 - Criar Jobs
+            if now.hour == 20 and now.minute == 1 and last_cron_date_jobs != now.date():
+                db = SessionLocal()
+                from models import Convenio
+                from services import job_service
+                unimed = db.query(Convenio).filter(Convenio.nome.ilike('%Unimed Goiania%')).first()
+                if unimed:
+                    created = job_service.create_all_jobs(db, id_convenio=unimed.id)
+                    db.commit()
+                    print(f"CRON (20:01): {created} jobs enfileirados para Unimed Goiania.")
+                db.close()
+                last_cron_date_jobs = now.date()
+                
+        except Exception as e:
+            print(f"Unimed Cron Loop Error: {e}")
+            
+        await asyncio.sleep(20) # Verifica a cada 20 segundos
+
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(run_cleanup_loop())
+    asyncio.create_task(run_unimed_cron_loop())
 
 # Include routers
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
