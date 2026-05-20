@@ -85,12 +85,12 @@ async def run_unimed_cron_loop():
                 db = SessionLocal()
                 try:
                     from sqlalchemy import text
-                    # id_pagamento=3 é Unimed Goiania (hardcoded conforme configuração do sistema)
-                    db.execute(text("DELETE FROM pei_temp WHERE base_guia_id IN (SELECT id FROM base_guias WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_pagamento = 3))"))
-                    db.execute(text("DELETE FROM patient_pei WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_pagamento = 3)"))
-                    db.execute(text("DELETE FROM base_guias WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_pagamento = 3)"))
+                    # Apaga tudo — pei_temp, patient_pei e base_guias não têm vínculo com convênio
+                    db.execute(text("DELETE FROM pei_temp"))
+                    db.execute(text("DELETE FROM patient_pei"))
+                    db.execute(text("DELETE FROM base_guias"))
                     db.commit()
-                    print(f"CRON (20:00): Guias e PEI limpos para Unimed Goiania (id=3) com sucesso.")
+                    print(f"CRON (20:00): pei_temp, patient_pei e base_guias limpos com sucesso.")
                 except Exception as e:
                     db.rollback()
                     print(f"CRON (20:00) ERRO DE BANCO: {e}")
