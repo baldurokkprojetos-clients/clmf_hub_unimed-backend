@@ -80,29 +80,17 @@ async def run_unimed_cron_loop():
         try:
             now = datetime.now()
             
-            # 20:00 - Limpar Guias e PEI
+            # 20:00 - Limpar Guias e PEI (Unimed Goiania id_pagamento=3)
             if now.hour == 20 and now.minute == 0 and last_cron_date_clear != now.date():
                 db = SessionLocal()
                 try:
-                    from models import Convenio
                     from sqlalchemy import text
-                    unimeds = db.query(Convenio).filter(Convenio.nome.ilike('%Unimed Goi%')).all()
-                    if unimeds:
-                        unimed_ids = [str(u.id) for u in unimeds]
-                        cids_str = ",".join(unimed_ids)
-                        
-                        # Usando SQL puro para garantir que grandes volumes não causem timeout ou erro no IN clause
-                        # 1. Deletar PeiTemp associado as guias da Unimed
-                        db.execute(text(f"DELETE FROM pei_temp WHERE base_guia_id IN (SELECT id FROM base_guias WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_pagamento IN ({cids_str})))"))
-                        
-                        # 2. Deletar PatientPei associado a Unimed
-                        db.execute(text(f"DELETE FROM patient_pei WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_pagamento IN ({cids_str}))"))
-                        
-                        # 3. Deletar BaseGuias da Unimed
-                        db.execute(text(f"DELETE FROM base_guias WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_pagamento IN ({cids_str}))"))
-                        
-                        db.commit()
-                        print(f"CRON (20:00): Guias e PEI limpos para Unimed Goiania com sucesso (SQL Puro).")
+                    # id_pagamento=3 é Unimed Goiania (hardcoded conforme configuração do sistema)
+                    db.execute(text("DELETE FROM pei_temp WHERE base_guia_id IN (SELECT id FROM base_guias WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_pagamento = 3))"))
+                    db.execute(text("DELETE FROM patient_pei WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_pagamento = 3)"))
+                    db.execute(text("DELETE FROM base_guias WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_pagamento = 3)"))
+                    db.commit()
+                    print(f"CRON (20:00): Guias e PEI limpos para Unimed Goiania (id=3) com sucesso.")
                 except Exception as e:
                     db.rollback()
                     print(f"CRON (20:00) ERRO DE BANCO: {e}")
@@ -110,20 +98,20 @@ async def run_unimed_cron_loop():
                     db.close()
                 last_cron_date_clear = now.date()
                 
-            # 20:01 - Criar Jobs
+            # 20:01 - Criar Jobs (Unimed Goiania id_pagamento=3)
             if now.hour == 20 and now.minute == 1 and last_cron_date_jobs != now.date():
                 db = SessionLocal()
-                from models import Convenio
-                from services import job_service
-                unimeds = db.query(Convenio).filter(Convenio.nome.ilike('%Unimed Goi%')).all()
-                if unimeds:
-                    total_created = 0
-                    for u in unimeds:
-                        created = job_service.create_all_jobs(db, id_convenio=u.id)
-                        total_created += created
+                try:
+                    from services import job_service
+                    # id_pagamento=3 é Unimed Goiania (hardcoded conforme configuração do sistema)
+                    total_created = job_service.create_all_jobs(db, id_convenio=3)
                     db.commit()
-                    print(f"CRON (20:01): {total_created} jobs enfileirados para Unimed Goiania.")
-                db.close()
+                    print(f"CRON (20:01): {total_created} jobs enfileirados para Unimed Goiania (id=3).")
+                except Exception as e:
+                    db.rollback()
+                    print(f"CRON (20:01) ERRO: {e}")
+                finally:
+                    db.close()
                 last_cron_date_jobs = now.date()
                 
         except Exception as e:
