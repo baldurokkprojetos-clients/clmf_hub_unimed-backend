@@ -30,7 +30,7 @@ def create_all_jobs(db: Session, id_convenio: Optional[int] = None) -> int:
     """
     query = db.query(Carteirinha).filter(Carteirinha.is_temporary == False)
     if id_convenio is not None:
-        query = query.filter(Carteirinha.id_convenio == id_convenio)
+        query = query.filter(Carteirinha.id_pagamento == id_convenio)
         
     all_carteirinhas = query.all()
     new_jobs = []

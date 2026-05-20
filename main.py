@@ -86,17 +86,18 @@ async def run_unimed_cron_loop():
                 try:
                     from models import Convenio
                     from sqlalchemy import text
-                    unimed = db.query(Convenio).filter(Convenio.nome.ilike('%Unimed Goiania%')).first()
-                    if unimed:
+                    unimeds = db.query(Convenio).filter(Convenio.nome.ilike('%Unimed Goi%')).all()
+                    if unimeds:
+                        unimed_ids = tuple([u.id for u in unimeds])
                         # Usando SQL puro para garantir que grandes volumes não causem timeout ou erro no IN clause
                         # 1. Deletar PeiTemp associado as guias da Unimed
-                        db.execute(text("DELETE FROM pei_temp WHERE base_guia_id IN (SELECT id FROM base_guias WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_convenio = :cid))"), {"cid": unimed.id})
+                        db.execute(text("DELETE FROM pei_temp WHERE base_guia_id IN (SELECT id FROM base_guias WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_pagamento IN :cids))"), {"cids": unimed_ids})
                         
                         # 2. Deletar PatientPei associado a Unimed
-                        db.execute(text("DELETE FROM patient_pei WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_convenio = :cid)"), {"cid": unimed.id})
+                        db.execute(text("DELETE FROM patient_pei WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_pagamento IN :cids)"), {"cids": unimed_ids})
                         
                         # 3. Deletar BaseGuias da Unimed
-                        db.execute(text("DELETE FROM base_guias WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_convenio = :cid)"), {"cid": unimed.id})
+                        db.execute(text("DELETE FROM base_guias WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_pagamento IN :cids)"), {"cids": unimed_ids})
                         
                         db.commit()
                         print(f"CRON (20:00): Guias e PEI limpos para Unimed Goiania com sucesso (SQL Puro).")
@@ -112,11 +113,14 @@ async def run_unimed_cron_loop():
                 db = SessionLocal()
                 from models import Convenio
                 from services import job_service
-                unimed = db.query(Convenio).filter(Convenio.nome.ilike('%Unimed Goiania%')).first()
-                if unimed:
-                    created = job_service.create_all_jobs(db, id_convenio=unimed.id)
+                unimeds = db.query(Convenio).filter(Convenio.nome.ilike('%Unimed Goi%')).all()
+                if unimeds:
+                    total_created = 0
+                    for u in unimeds:
+                        created = job_service.create_all_jobs(db, id_convenio=u.id)
+                        total_created += created
                     db.commit()
-                    print(f"CRON (20:01): {created} jobs enfileirados para Unimed Goiania.")
+                    print(f"CRON (20:01): {total_created} jobs enfileirados para Unimed Goiania.")
                 db.close()
                 last_cron_date_jobs = now.date()
                 
