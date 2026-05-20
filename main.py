@@ -83,19 +83,28 @@ async def run_unimed_cron_loop():
             # 20:00 - Limpar Guias e PEI
             if now.hour == 20 and now.minute == 0 and last_cron_date_clear != now.date():
                 db = SessionLocal()
-                from models import Convenio, Carteirinha, BaseGuia, PatientPei, PeiTemp
-                unimed = db.query(Convenio).filter(Convenio.nome.ilike('%Unimed Goiania%')).first()
-                if unimed:
-                    cart_ids = [c.id for c in db.query(Carteirinha.id).filter(Carteirinha.id_convenio == unimed.id).all()]
-                    if cart_ids:
-                        guia_ids = [g.id for g in db.query(BaseGuia.id).filter(BaseGuia.carteirinha_id.in_(cart_ids)).all()]
-                        if guia_ids:
-                            db.query(PeiTemp).filter(PeiTemp.base_guia_id.in_(guia_ids)).delete(synchronize_session=False)
-                        db.query(PatientPei).filter(PatientPei.carteirinha_id.in_(cart_ids)).delete(synchronize_session=False)
-                        db.query(BaseGuia).filter(BaseGuia.carteirinha_id.in_(cart_ids)).delete(synchronize_session=False)
+                try:
+                    from models import Convenio
+                    from sqlalchemy import text
+                    unimed = db.query(Convenio).filter(Convenio.nome.ilike('%Unimed Goiania%')).first()
+                    if unimed:
+                        # Usando SQL puro para garantir que grandes volumes não causem timeout ou erro no IN clause
+                        # 1. Deletar PeiTemp associado as guias da Unimed
+                        db.execute(text("DELETE FROM pei_temp WHERE base_guia_id IN (SELECT id FROM base_guias WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_convenio = :cid))"), {"cid": unimed.id})
+                        
+                        # 2. Deletar PatientPei associado a Unimed
+                        db.execute(text("DELETE FROM patient_pei WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_convenio = :cid)"), {"cid": unimed.id})
+                        
+                        # 3. Deletar BaseGuias da Unimed
+                        db.execute(text("DELETE FROM base_guias WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_convenio = :cid)"), {"cid": unimed.id})
+                        
                         db.commit()
-                        print(f"CRON (20:00): Guias e PEI limpos para Unimed Goiania.")
-                db.close()
+                        print(f"CRON (20:00): Guias e PEI limpos para Unimed Goiania com sucesso (SQL Puro).")
+                except Exception as e:
+                    db.rollback()
+                    print(f"CRON (20:00) ERRO DE BANCO: {e}")
+                finally:
+                    db.close()
                 last_cron_date_clear = now.date()
                 
             # 20:01 - Criar Jobs
