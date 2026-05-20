@@ -88,16 +88,18 @@ async def run_unimed_cron_loop():
                     from sqlalchemy import text
                     unimeds = db.query(Convenio).filter(Convenio.nome.ilike('%Unimed Goi%')).all()
                     if unimeds:
-                        unimed_ids = tuple([u.id for u in unimeds])
+                        unimed_ids = [str(u.id) for u in unimeds]
+                        cids_str = ",".join(unimed_ids)
+                        
                         # Usando SQL puro para garantir que grandes volumes não causem timeout ou erro no IN clause
                         # 1. Deletar PeiTemp associado as guias da Unimed
-                        db.execute(text("DELETE FROM pei_temp WHERE base_guia_id IN (SELECT id FROM base_guias WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_pagamento IN :cids))"), {"cids": unimed_ids})
+                        db.execute(text(f"DELETE FROM pei_temp WHERE base_guia_id IN (SELECT id FROM base_guias WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_pagamento IN ({cids_str})))"))
                         
                         # 2. Deletar PatientPei associado a Unimed
-                        db.execute(text("DELETE FROM patient_pei WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_pagamento IN :cids)"), {"cids": unimed_ids})
+                        db.execute(text(f"DELETE FROM patient_pei WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_pagamento IN ({cids_str}))"))
                         
                         # 3. Deletar BaseGuias da Unimed
-                        db.execute(text("DELETE FROM base_guias WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_pagamento IN :cids)"), {"cids": unimed_ids})
+                        db.execute(text(f"DELETE FROM base_guias WHERE carteirinha_id IN (SELECT id FROM carteirinhas WHERE id_pagamento IN ({cids_str}))"))
                         
                         db.commit()
                         print(f"CRON (20:00): Guias e PEI limpos para Unimed Goiania com sucesso (SQL Puro).")
