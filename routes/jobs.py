@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from dependencies import get_current_user
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from database import get_db
 from models import Job, Carteirinha
 from typing import List, Optional
@@ -64,6 +65,7 @@ def list_jobs(
     created_at_start: Optional[date] = None,
     created_at_end: Optional[date] = None,
     carteirinha_id: Optional[int] = None,
+    status_guias: Optional[str] = None,
     limit: int = 25, 
     skip: int = 0,
     db: Session = Depends(get_db),
@@ -82,6 +84,20 @@ def list_jobs(
         
     if carteirinha_id:
         query = query.filter(Job.carteirinha_id == carteirinha_id)
+
+    if status_guias:
+        if status_guias == 'validas':
+            query = query.filter(Job.valida_prestador['tipo_json'].astext == 'All Sucess')
+        elif status_guias == 'bloqueadas':
+            query = query.filter(Job.valida_prestador['tipo_json'].astext == 'Thered')
+        elif status_guias == 'sem_guias':
+            query = query.filter(
+                or_(
+                    Job.valida_prestador.is_(None),
+                    Job.valida_prestador['tipo_json'].astext.is_(None),
+                    Job.valida_prestador['tipo_json'].astext == 'Null'
+                )
+            )
     
     # Order by priority desc, created_at asc
     total = query.count()
