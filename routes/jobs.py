@@ -63,6 +63,7 @@ def list_jobs(
     status: Optional[str] = None,
     created_at_start: Optional[date] = None,
     created_at_end: Optional[date] = None,
+    carteirinha_id: Optional[int] = None,
     limit: int = 25, 
     skip: int = 0,
     db: Session = Depends(get_db),
@@ -78,6 +79,9 @@ def list_jobs(
     if created_at_end:
         end_dt = datetime.combine(created_at_end, datetime.min.time()) + timedelta(days=1)
         query = query.filter(Job.created_at < end_dt)
+        
+    if carteirinha_id:
+        query = query.filter(Job.carteirinha_id == carteirinha_id)
     
     # Order by priority desc, created_at asc
     total = query.count()
