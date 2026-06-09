@@ -70,7 +70,7 @@ class Job(Base):
     priority = Column(Integer, default=0)
     locked_by = Column(Text)  # Server URL
     timeout = Column(DateTime(timezone=True))
-    valida_prestador = Column(JSON, nullable=True)
+    valida_prestador = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -89,7 +89,7 @@ class BaseGuia(Base):
     codigo_procedimento = Column(Text, index=True)
     qtde_solicitada = Column(Integer)
     sessoes_autorizadas = Column(Integer)
-    valida_prestador = Column(JSON, nullable=True)
+    valida_prestador = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), index=True)
 
