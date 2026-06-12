@@ -80,8 +80,8 @@ async def run_unimed_cron_loop():
         try:
             now = datetime.now()
             
-            # 20:00 - Limpar Guias e PEI (Unimed Goiania id_pagamento=3)
-            if now.hour == 20 and now.minute == 0 and last_cron_date_clear != now.date():
+            # 23:00 GMT+00 (20:00 Brasília) - Limpar Guias e PEI (Unimed Goiania id_pagamento=3)
+            if now.hour == 23 and now.minute == 0 and last_cron_date_clear != now.date():
                 db = SessionLocal()
                 try:
                     from sqlalchemy import text
@@ -90,26 +90,26 @@ async def run_unimed_cron_loop():
                     db.execute(text("DELETE FROM patient_pei"))
                     db.execute(text("DELETE FROM base_guias"))
                     db.commit()
-                    print(f"CRON (20:00): pei_temp, patient_pei e base_guias limpos com sucesso.")
+                    print(f"CRON (23:00 GMT+00): pei_temp, patient_pei e base_guias limpos com sucesso.")
                 except Exception as e:
                     db.rollback()
-                    print(f"CRON (20:00) ERRO DE BANCO: {e}")
+                    print(f"CRON (23:00 GMT+00) ERRO DE BANCO: {e}")
                 finally:
                     db.close()
                 last_cron_date_clear = now.date()
                 
-            # 20:01 - Criar Jobs (Unimed Goiania id_pagamento=3)
-            if now.hour == 20 and now.minute == 1 and last_cron_date_jobs != now.date():
+            # 23:01 GMT+00 (20:01 Brasília) - Criar Jobs (Unimed Goiania id_pagamento=3)
+            if now.hour == 23 and now.minute == 1 and last_cron_date_jobs != now.date():
                 db = SessionLocal()
                 try:
                     from services import job_service
                     # id_pagamento=3 é Unimed Goiania (hardcoded conforme configuração do sistema)
                     total_created = job_service.create_all_jobs(db, id_convenio=3)
                     db.commit()
-                    print(f"CRON (20:01): {total_created} jobs enfileirados para Unimed Goiania (id=3).")
+                    print(f"CRON (23:01 GMT+00): {total_created} jobs enfileirados para Unimed Goiania (id=3).")
                 except Exception as e:
                     db.rollback()
-                    print(f"CRON (20:01) ERRO: {e}")
+                    print(f"CRON (23:01 GMT+00) ERRO: {e}")
                 finally:
                     db.close()
                 last_cron_date_jobs = now.date()
