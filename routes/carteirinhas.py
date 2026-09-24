@@ -309,7 +309,32 @@ def create_carteirinha(item: dict = Body(...), db: Session = Depends(get_db), us
     existing = db.query(Carteirinha).filter(Carteirinha.carteirinha == item['carteirinha']).first()
     if existing:
         raise HTTPException(status_code=400, detail=f"Carteirinha {item['carteirinha']} already exists")
-    
+
+    # Duplicidade de ID Paciente: 409 com o cadastro existente para o
+    # frontend exibir o alerta (Editar / Prosseguir). A criação só ocorre
+    # com a confirmação explícita do usuário (force=True).
+    if not item.get('force'):
+        dup = db.query(Carteirinha)\
+            .filter(Carteirinha.id_paciente == item['id_paciente'])\
+            .order_by(Carteirinha.id.asc())\
+            .first()
+        if dup:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "ID_PACIENTE_EXISTS",
+                    "message": f"Já existe paciente com o mesmo id cadastrado {dup.paciente or dup.carteirinha}",
+                    "existing": {
+                        "id": dup.id,
+                        "carteirinha": dup.carteirinha,
+                        "paciente": dup.paciente or "",
+                        "id_paciente": dup.id_paciente,
+                        "id_pagamento": dup.id_pagamento,
+                        "status": dup.status,
+                    }
+                }
+            )
+
     new_cart = Carteirinha(
         carteirinha=item['carteirinha'],
         paciente=item.get('paciente', ''),
