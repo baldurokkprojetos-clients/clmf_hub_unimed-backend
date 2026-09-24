@@ -19,6 +19,7 @@ Terapia; nome do profissional e resolvido no select pelo ID_prof).
 import io
 import os
 import re
+import threading
 from datetime import date, datetime, timedelta
 
 from openpyxl import Workbook, load_workbook
@@ -41,6 +42,10 @@ JANELA_DIAS = 30
 
 # Limites do relatorio de erros retornado pelo upload
 MAX_ERROS_RETORNO = 50
+
+# Criacao de jobs em LOTES: 1 commit a cada N jobs (commit-por-job via WAN ao
+# Supabase custa ~1 job/s; com lote de 200, 10k jobs saem em ~1 min).
+CRIACAO_BATCH_JOBS = 200
 
 
 # ─── Parsing de celulas ─────────────────────────────────────────────────────
@@ -185,64 +190,134 @@ def _credenciais_params() -> dict:
     return out
 
 
-def criar_jobs_evolucao(db: Session, contents: bytes, filename: str) -> dict:
-    """Cria 1 job por (idPaciente, DataExec) + itens PENDENTE. Transacao por job:
-    um job com falha nao derruba o lote. Retorna resumo do lote."""
-    payloads, erros = parse_planilha(contents)
-    if not payloads:
-        raise ValueError("Nenhuma linha valida encontrada na planilha. "
-                         f"Primeiros erros: {'; '.join(erros[:5]) or 'planilha sem dados'}")
+def nome_lote(filename: str) -> str:
+    return f"{filename}:{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
 
+
+def _pares_existentes(db: Session) -> set[tuple[str, str]]:
+    """(idPaciente, dataExec) que JÁ possuem job da rotina (qualquer status).
+
+    Torna o re-upload idempotente: pares já criados não duplicam (um lote
+    interrompido no meio pode ser reenviado sem medo). Para reprocessar um par,
+    exclua/retry o job existente antes.
+    """
+    rows = db.query(
+        Job.params["idPaciente"].astext,
+        Job.params["dataExec"].astext,
+    ).filter(Job.rotina == ROTINA_EVOLUCAO).all()
+    return {(r[0], r[1]) for r in rows if r[0] is not None}
+
+
+def _commit_lote_jobs(db: Session, payloads: list[dict], lote: str, ancora_id: int) -> int:
+    """Insere um lote de jobs + itens PENDENTE em UMA transação (flush unico
+    popula os job.id). Retorna nº de itens criados."""
+    job_objs = []
+    for payload in payloads:
+        job = Job(
+            carteirinha_id=ancora_id,
+            rotina=ROTINA_EVOLUCAO,
+            params=payload,  # credenciais já embutidas
+            status="pending",
+        )
+        db.add(job)
+        job_objs.append(job)
+    db.flush()  # popula os ids dos jobs
+
+    itens = []
+    for job_obj, payload in zip(job_objs, payloads):
+        itens.extend(_itens_do_payload(job_obj.id, payload, lote))
+    db.add_all(itens)
+    db.commit()
+    return len(itens)
+
+
+def _itens_do_payload(job_id: int, payload: dict, lote: str) -> list[EvolucaoItem]:
+    out = []
+    for item in payload["itens"]:
+        for hora in item["horas"]:
+            out.append(EvolucaoItem(
+                job_id=job_id,
+                lote=lote,
+                id_paciente=payload["idPaciente"],
+                nome_paciente=payload["nomePaciente"],
+                guia=item["guia"],
+                data_exec=date.fromisoformat(payload["dataExec"]),
+                profissional_id=item["ID_prof"],
+                terapia=item["terapia"],
+                hora_inicial=hora,
+                status="PENDENTE",
+            ))
+    return out
+
+
+def criar_jobs_evolucao(db: Session, payloads: list[dict], filename: str, lote: str | None = None) -> dict:
+    """Cria 1 job por (idPaciente, DataExec) a partir de payloads JÁ parseados,
+    com dedup de pares existentes e commits em lote (CRIACAO_BATCH_JOBS).
+    Falha em um lote não derruba os demais (isolamento por lote)."""
     ancora = db.query(Carteirinha).filter(Carteirinha.carteirinha == CARTEIRINHA_ANCORA).first()
     if not ancora:
         raise RuntimeError(f"Carteirinha ancora '{CARTEIRINHA_ANCORA}' ausente — rode a migration 0032.")
 
-    lote = f"{filename}:{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    lote = lote or nome_lote(filename)
     credenciais = _credenciais_params()
+    existentes = _pares_existentes(db)
 
-    jobs_ok, itens_ok, falhas = 0, 0, []
+    jobs_ok, itens_ok, pulados, falhas = 0, 0, 0, []
+    pendentes: list[dict] = []
+
     for payload in payloads:
-        try:
-            params = {**payload, **credenciais}
-            job = Job(
-                carteirinha_id=ancora.id,
-                rotina=ROTINA_EVOLUCAO,
-                params=params,
-                status="pending",
-            )
-            db.add(job)
-            db.flush()  # job.id para FK dos itens
+        chave = (str(payload["idPaciente"]), payload["dataExec"])
+        if chave in existentes:
+            pulados += 1
+            continue
+        existentes.add(chave)
+        pendentes.append({**payload, **credenciais})
 
-            for item in payload["itens"]:
-                for hora in item["horas"]:
-                    db.add(EvolucaoItem(
-                        job_id=job.id,
-                        lote=lote,
-                        id_paciente=payload["idPaciente"],
-                        nome_paciente=payload["nomePaciente"],
-                        guia=item["guia"],
-                        data_exec=date.fromisoformat(payload["dataExec"]),
-                        profissional_id=item["ID_prof"],
-                        terapia=item["terapia"],
-                        hora_inicial=hora,
-                        status="PENDENTE",
-                    ))
-            db.commit()
-            jobs_ok += 1
-            itens_ok += sum(len(i["horas"]) for i in payload["itens"])
+        if len(pendentes) >= CRIACAO_BATCH_JOBS:
+            try:
+                itens_ok += _commit_lote_jobs(db, pendentes, lote, ancora.id)
+                jobs_ok += len(pendentes)
+            except Exception as e:
+                db.rollback()
+                falhas.append(f"lote de {len(pendentes)} jobs a partir de "
+                              f"{pendentes[0]['idPaciente']}/{pendentes[0]['dataExec']}: {e}")
+            pendentes = []
+
+    if pendentes:
+        try:
+            itens_ok += _commit_lote_jobs(db, pendentes, lote, ancora.id)
+            jobs_ok += len(pendentes)
         except Exception as e:
             db.rollback()
-            falhas.append(f"job {payload['idPaciente']}/{payload['dataExec']}: {e}")
+            falhas.append(f"lote final de {len(pendentes)} jobs: {e}")
 
     return {
         "lote": lote,
         "jobs": jobs_ok,
         "itens": itens_ok,
-        "pacientes": len({p["idPaciente"] for p in payloads}),
-        "datas": len(payloads),
+        "pulados_duplicados": pulados,
         "falhas": falhas[:MAX_ERROS_RETORNO],
-        "erros_planilha": erros[:MAX_ERROS_RETORNO],
     }
+
+
+def criar_jobs_background(payloads: list[dict], filename: str, lote: str):
+    """Executa a criação de jobs em thread própria (session dedicada).
+
+    Upload de planilhas grandes (20k+ linhas) não pode travar o event loop nem
+    estourar timeout do proxy (Render): o endpoint responde imediatamente e a
+    criação corre aqui; o progresso aparece no painel via /evolucoes/jobs.
+    """
+    try:
+        from database import SessionLocal
+        db = SessionLocal()
+        try:
+            resumo = criar_jobs_evolucao(db, payloads, filename, lote)
+            print(f"[evolucoes] lote {lote}: {resumo['jobs']} jobs / {resumo['itens']} itens criados, "
+                  f"{resumo['pulados_duplicados']} duplicados pulados, falhas={len(resumo['falhas'])}")
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[evolucoes] ERRO na criacao do lote {lote}: {e}")
 
 
 # ─── Export de status (xlsx) ────────────────────────────────────────────────

@@ -6,7 +6,10 @@ Rotas da OP2 ImprimirEvolucao (rotina 'clmf_imprimir_evolucao').
   GET  /evolucoes/export  → download xlsx de status (idPaciente, guia, data, profissional_id,
                             horaInicial, status, ... extras motivo/pdfPath)
 """
+import threading
+
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
@@ -22,23 +25,46 @@ router = APIRouter(prefix="/evolucoes", tags=["Evolucoes"])
 @router.post("/upload")
 async def upload_evolucoes(
     file: UploadFile = File(...),
-    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     if not (file.filename or "").lower().endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="Envie um arquivo .xlsx (planilha modelo de evolucoes).")
 
     contents = await file.read()
+    await file.close()
+
+    # Parse fora do event loop (planilhas de 20k+ linhas levam segundos)
     try:
-        resumo = evolucao_service.criar_jobs_evolucao(db, contents, file.filename)
+        payloads, erros = await run_in_threadpool(evolucao_service.parse_planilha, contents)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        await file.close()
 
-    return resumo
+    if not payloads:
+        raise HTTPException(status_code=422, detail=(
+            "Nenhuma linha valida encontrada na planilha. "
+            f"Primeiros erros: {'; '.join(erros[:5]) or 'planilha sem dados'}"))
+
+    # Criacao dos jobs em background: resposta imediata (nao trava o backend nem
+    # estoura timeout de proxy — Render). Progresso acompanhadivel no painel
+    # (/evolucoes/jobs) e a criacao e idempotente (pares existentes sao pulados).
+    lote = evolucao_service.nome_lote(file.filename)
+    threading.Thread(
+        target=evolucao_service.criar_jobs_background,
+        args=(payloads, file.filename, lote),
+        daemon=True,
+        name=f"evolucoes-upload-{lote}",
+    ).start()
+
+    return {
+        "lote": lote,
+        "background": True,
+        "mensagem": "Planilha validada — criação dos jobs em andamento em segundo plano. "
+                    "Acompanhe o progresso no painel abaixo (atualiza a cada 5s).",
+        "jobs": len(payloads),
+        "itens": sum(len(i["horas"]) for p in payloads for i in p["itens"]),
+        "pacientes": len({p["idPaciente"] for p in payloads}),
+        "erros_planilha": erros[:50],
+    }
 
 
 @router.get("/jobs")
