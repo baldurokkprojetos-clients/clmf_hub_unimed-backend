@@ -66,15 +66,22 @@ def list_jobs(
     created_at_end: Optional[date] = None,
     carteirinha_id: Optional[int] = None,
     status_guias: Optional[str] = None,
-    limit: int = 25, 
+    rotina: Optional[str] = None,
+    limit: int = 25,
     skip: int = 0,
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
+    current_user=Depends(get_current_user)
 ):
     query = db.query(Job)
-    
+
     if status:
         query = query.filter(Job.status == status)
+
+    if rotina:
+        if rotina == "none":
+            query = query.filter(or_(Job.rotina.is_(None), Job.rotina == ""))
+        else:
+            query = query.filter(Job.rotina == rotina)
         
     if created_at_start:
         query = query.filter(Job.created_at >= created_at_start)
@@ -107,6 +114,7 @@ def list_jobs(
         return {
             "id": j.id,
             "carteirinha_id": j.carteirinha_id,
+            "rotina": j.rotina,
             "status": j.status,
             "attempts": j.attempts,
             "priority": j.priority,

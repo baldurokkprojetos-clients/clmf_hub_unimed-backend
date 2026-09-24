@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, Text, Float, Boolean, JSON
+from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, Text, Float, Boolean, JSON, BigInteger
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -187,6 +187,52 @@ class ProtocoloLote(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     arquivos = relationship("ProtocoloArquivo", back_populates="lote_rel", cascade="all, delete-orphan")
+
+
+class EvolucaoItem(Base):
+    """OP2 ImprimirEvolucao — resultado por linha conciliada (fonte do export de status).
+
+    Chave natural: (job_id, guia, data_exec, profissional_id, hora_inicial) — única por
+    migration 0032; garante idempotência em retry do job.
+    """
+    __tablename__ = "evolucao_itens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    lote = Column(Text, index=True)
+    id_paciente = Column(Integer, index=True)
+    nome_paciente = Column(Text)
+    guia = Column(Text)
+    data_exec = Column(Date, index=True)
+    profissional_id = Column(Integer)          # ID_prof da planilha
+    terapia = Column(Text)                     # coluna Terapia (nome)
+    profissao_id = Column(Integer, nullable=True)  # mapeado no select do portal
+    hora_inicial = Column(Text)                # "0700"
+    status = Column(Text, nullable=False, default="PENDENTE", index=True)  # PENDENTE|PROCESSANDO|OK|ERRO
+    motivo = Column(Text, nullable=True)
+    ids_conciliados = Column(JSONB, nullable=True)
+    pdf_path = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    job_rel = relationship("Job")
+
+
+class EvolucaoClaim(Base):
+    """OP2 ImprimirEvolucao — reserva atômica de candidato do portal entre jobs/servidores.
+
+    UNIQUE(fluxo, portal_item_id): o INSERT em conflito indica item já consumido por
+    outro job (ou pelo próprio job em retry — então é reutilizado).
+    """
+    __tablename__ = "evolucao_claims"
+
+    id = Column(Integer, primary_key=True, index=True)
+    fluxo = Column(Text, nullable=False)               # 'aba' | 'evolution'
+    portal_item_id = Column(BigInteger, nullable=False)
+    job_id = Column(Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    job_rel = relationship("Job")
 
 
 class ProtocoloArquivo(Base):
