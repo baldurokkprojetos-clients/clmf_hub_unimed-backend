@@ -11,7 +11,7 @@ import threading
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
-from sqlalchemy import case, func
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -70,27 +70,68 @@ async def upload_evolucoes(
 @router.get("/jobs")
 def list_evolucoes_jobs(
     lote: str | None = Query(None),
-    limit: int = Query(200, le=1000),
+    paciente: str | None = Query(None, description="Busca por nome (contém, sem acento insensível) ou idPaciente exato"),
+    status: str | None = Query(None, description="ok | pendente | erro — pacientes com ao menos 1 item no status"),
+    limit: int = Query(25, ge=1, le=200),
+    skip: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Agregado por idPaciente para o painel do frontend."""
-    pendente = case((EvolucaoItem.status.in_(("PENDENTE", "PROCESSANDO")), 1), else_=0)
-    query = db.query(
+    """Agregado por idPaciente para o painel do frontend (filtros + paginação + resumo)."""
+    ok_n = case((EvolucaoItem.status == "OK", 1), else_=0)
+    pend_n = case((EvolucaoItem.status.in_(("PENDENTE", "PROCESSANDO")), 1), else_=0)
+    erro_n = case((EvolucaoItem.status == "ERRO", 1), else_=0)
+
+    def filtros_escopo(query):
+        """Filtros de escopo (lote + paciente) — reaproveitados no resumo do dashboard."""
+        if lote:
+            query = query.filter(EvolucaoItem.lote == lote)
+        if paciente:
+            termo = paciente.strip()
+            if termo.isdigit():
+                query = query.filter(or_(
+                    EvolucaoItem.nome_paciente.ilike(f"%{termo}%"),
+                    EvolucaoItem.id_paciente == int(termo),
+                ))
+            else:
+                query = query.filter(EvolucaoItem.nome_paciente.ilike(f"%{termo}%"))
+        return query
+
+    query = filtros_escopo(db.query(
         EvolucaoItem.id_paciente,
         func.max(EvolucaoItem.nome_paciente).label("nome_paciente"),
         func.max(EvolucaoItem.lote).label("lote"),
         func.count(EvolucaoItem.id).label("total"),
-        func.sum(case((EvolucaoItem.status == "OK", 1), else_=0)).label("ok"),
-        func.sum(pendente).label("pendente"),
-        func.sum(case((EvolucaoItem.status == "ERRO", 1), else_=0)).label("erro"),
+        func.sum(ok_n).label("ok"),
+        func.sum(pend_n).label("pendente"),
+        func.sum(erro_n).label("erro"),
         func.max(EvolucaoItem.updated_at).label("updated_at"),
-    ).group_by(EvolucaoItem.id_paciente)
+    ).group_by(EvolucaoItem.id_paciente))
 
-    if lote:
-        query = query.filter(EvolucaoItem.lote == lote)
+    # Filtro de status atua no agregado (paciente precisa ter ao menos 1 item no status)
+    if status:
+        s = status.strip().lower()
+        if s == "ok":
+            query = query.having(func.sum(ok_n) > 0)
+        elif s == "pendente":
+            query = query.having(func.sum(pend_n) > 0)
+        elif s == "erro":
+            query = query.having(func.sum(erro_n) > 0)
+        else:
+            raise HTTPException(status_code=422, detail="Status inválido: use ok, pendente ou erro.")
 
-    rows = query.order_by(func.max(EvolucaoItem.updated_at).desc()).limit(limit).all()
+    total = query.count()  # nº de pacientes (grupos) que casam com os filtros
+    rows = query.order_by(func.max(EvolucaoItem.updated_at).desc()).offset(skip).limit(limit).all()
+
+    # Resumo do dashboard: mesmo escopo de lote/paciente, mas ignora o filtro de
+    # status — o quadro completo OK/PENDENTE/ERRO continua visível durante o filtro
+    resumo = filtros_escopo(db.query(
+        func.count(EvolucaoItem.id).label("itens"),
+        func.count(func.distinct(EvolucaoItem.id_paciente)).label("pacientes"),
+        func.sum(ok_n).label("ok"),
+        func.sum(pend_n).label("pendente"),
+        func.sum(erro_n).label("erro"),
+    )).one()
 
     return {
         "data": [
@@ -105,7 +146,15 @@ def list_evolucoes_jobs(
                 "updated_at": r.updated_at,
             }
             for r in rows
-        ]
+        ],
+        "total": total,
+        "resumo": {
+            "total": resumo.itens,
+            "pacientes": resumo.pacientes,
+            "ok": int(resumo.ok or 0),
+            "pendente": int(resumo.pendente or 0),
+            "erro": int(resumo.erro or 0),
+        },
     }
 
 
