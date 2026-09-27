@@ -25,6 +25,7 @@ router = APIRouter(prefix="/evolucoes", tags=["Evolucoes"])
 @router.post("/upload")
 async def upload_evolucoes(
     file: UploadFile = File(...),
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     if not (file.filename or "").lower().endswith(".xlsx"):
@@ -43,6 +44,17 @@ async def upload_evolucoes(
         raise HTTPException(status_code=422, detail=(
             "Nenhuma linha valida encontrada na planilha. "
             f"Primeiros erros: {'; '.join(erros[:5]) or 'planilha sem dados'}"))
+
+    # Estimativa honesta ANTES do background: pares que já têm job e itens do
+    # arquivo ligados a eles (esses itens serão RECONCILIADOS nos jobs
+    # existentes — os que faltam entram como PENDENTE, os já processados
+    # mantêm o status atual)
+    existentes = evolucao_service._pares_existentes(db)
+    pares_duplicados = sum(
+        1 for p in payloads if (str(p["idPaciente"]), p["dataExec"]) in existentes)
+    itens_duplicados = sum(
+        sum(len(i["horas"]) for i in p["itens"])
+        for p in payloads if (str(p["idPaciente"]), p["dataExec"]) in existentes)
 
     # Criacao dos jobs em background: resposta imediata (nao trava o backend nem
     # estoura timeout de proxy — Render). Progresso acompanhadivel no painel
@@ -63,7 +75,35 @@ async def upload_evolucoes(
         "jobs": len(payloads),
         "itens": sum(len(i["horas"]) for p in payloads for i in p["itens"]),
         "pacientes": len({p["idPaciente"] for p in payloads}),
+        "pares_duplicados": pares_duplicados,
+        "itens_duplicados": itens_duplicados,
         "erros_planilha": erros[:50],
+    }
+
+
+@router.get("/lotes")
+def list_lotes(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Lotes distintos (para o filtro do painel): nome, nº de itens e última atividade."""
+    rows = db.query(
+        EvolucaoItem.lote,
+        func.count(EvolucaoItem.id).label("itens"),
+        func.max(EvolucaoItem.updated_at).label("updated_at"),
+    ).filter(EvolucaoItem.lote.isnot(None), EvolucaoItem.lote != "").group_by(
+        EvolucaoItem.lote
+    ).order_by(func.max(EvolucaoItem.updated_at).desc()).limit(50).all()
+    return {
+        "data": [
+            {
+                "lote": r.lote,
+                "nome": (r.lote or "").split(":")[0],
+                "itens": r.itens,
+                "updated_at": r.updated_at,
+            }
+            for r in rows
+        ]
     }
 
 

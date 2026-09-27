@@ -198,14 +198,97 @@ def _pares_existentes(db: Session) -> set[tuple[str, str]]:
     """(idPaciente, dataExec) que JÁ possuem job da rotina (qualquer status).
 
     Torna o re-upload idempotente: pares já criados não duplicam (um lote
-    interrompido no meio pode ser reenviado sem medo). Para reprocessar um par,
-    exclua/retry o job existente antes.
+    interrompido no meio pode ser reenviado sem medo). Os itens NOVOS desses
+    pares são reconciliados por _reconciliar_pares_existentes.
     """
     rows = db.query(
         Job.params["idPaciente"].astext,
         Job.params["dataExec"].astext,
     ).filter(Job.rotina == ROTINA_EVOLUCAO).all()
     return {(r[0], r[1]) for r in rows if r[0] is not None}
+
+
+def _reconciliar_pares_existentes(db: Session, pulados_payloads: list[dict], lote: str) -> tuple[int, int]:
+    """Reconcilia itens de pares que JÁ têm job (upload os pula na criação).
+
+    O worker processa params["itens"] do job (não a tabela): sem o merge, itens
+    novos do arquivo (guias/horas que o lote anterior não tinha) nunca rodariam.
+    Faz: (1) merge das chaves faltantes no params, (2) insert de itens PENDENTE,
+    (3) reenfileira job terminal (a retomada do worker pula itens já OK).
+    Retorna (itens_reconciliados, jobs_reenfileirados).
+    """
+    if not pulados_payloads:
+        return 0, 0
+
+    pares = {(str(p["idPaciente"]), p["dataExec"]) for p in pulados_payloads}
+    jobs = db.query(Job).filter(Job.rotina == ROTINA_EVOLUCAO).all()
+    job_por_par = {(str(j.params["idPaciente"]), j.params["dataExec"]): j
+                   for j in jobs if (str(j.params.get("idPaciente")), j.params.get("dataExec")) in pares}
+
+    job_ids = list(job_por_par.values())
+    chaves_por_job: dict[int, set] = {}
+    if job_ids:
+        rows = db.query(
+            EvolucaoItem.job_id, EvolucaoItem.guia,
+            EvolucaoItem.profissional_id, EvolucaoItem.hora_inicial,
+        ).filter(EvolucaoItem.job_id.in_([j.id for j in job_ids])).all()
+        for r in rows:
+            chaves_por_job.setdefault(r[0], set()).add((r[1], r[2], r[3]))
+
+    itens_ok, jobs_ok = 0, 0
+    for p in pulados_payloads:
+        job = job_por_par.get((str(p["idPaciente"]), p["dataExec"]))
+        if not job:
+            continue
+        existentes = chaves_por_job.get(job.id, set())
+
+        faltantes: dict[tuple[str, int], list[str]] = {}
+        for it in p["itens"]:
+            for h in it["horas"]:
+                if (it["guia"], it["ID_prof"], h) not in existentes:
+                    faltantes.setdefault((it["guia"], it["ID_prof"]), []).append(h)
+        if not faltantes:
+            continue
+
+        params = dict(job.params)
+        itens_params = [dict(i) for i in params.get("itens", [])]
+        index = {(i["guia"], i["ID_prof"]): i for i in itens_params}
+        novos = []
+        for (guia, id_prof), horas in faltantes.items():
+            origem = next((i for i in p["itens"] if i["guia"] == guia and i["ID_prof"] == id_prof), None)
+            terapia = (origem or {}).get("terapia") or index.get((guia, id_prof), {}).get("terapia", "")
+            if (guia, id_prof) in index:
+                for h in horas:
+                    if h not in index[(guia, id_prof)]["horas"]:
+                        index[(guia, id_prof)]["horas"].append(h)
+            else:
+                itens_params.append({"guia": guia, "ID_prof": id_prof,
+                                     "terapia": terapia, "horas": list(horas)})
+            for h in horas:
+                novos.append(EvolucaoItem(
+                    job_id=job.id, lote=lote, id_paciente=p["idPaciente"],
+                    nome_paciente=p.get("nomePaciente") or "", guia=guia,
+                    data_exec=date.fromisoformat(p["dataExec"]),
+                    profissional_id=id_prof, terapia=terapia,
+                    hora_inicial=h, status="PENDENTE",
+                ))
+        params["itens"] = itens_params
+        job.params = params  # reatribuição para o SQLAlchemy detectar a mudança no JSONB
+
+        if job.status in ("success", "error"):
+            job.status = "pending"
+            job.attempts = 0
+            job.locked_by = None
+            jobs_ok += 1
+
+        db.add_all(novos)
+        try:
+            db.commit()
+            itens_ok += len(novos)
+        except Exception:
+            db.rollback()
+            raise
+    return itens_ok, jobs_ok
 
 
 def _commit_lote_jobs(db: Session, payloads: list[dict], lote: str, ancora_id: int) -> int:
@@ -264,11 +347,13 @@ def criar_jobs_evolucao(db: Session, payloads: list[dict], filename: str, lote: 
 
     jobs_ok, itens_ok, pulados, falhas = 0, 0, 0, []
     pendentes: list[dict] = []
+    pulados_payloads: list[dict] = []
 
     for payload in payloads:
         chave = (str(payload["idPaciente"]), payload["dataExec"])
         if chave in existentes:
             pulados += 1
+            pulados_payloads.append(payload)
             continue
         existentes.add(chave)
         pendentes.append({**payload, **credenciais})
@@ -291,11 +376,22 @@ def criar_jobs_evolucao(db: Session, payloads: list[dict], filename: str, lote: 
             db.rollback()
             falhas.append(f"lote final de {len(pendentes)} jobs: {e}")
 
+    # Pares que já tinham job: reconcilia itens novos do arquivo (merge no
+    # params + insert PENDENTE + reenfileira job terminal)
+    itens_reconciliados = jobs_reenfileirados = 0
+    try:
+        itens_reconciliados, jobs_reenfileirados = _reconciliar_pares_existentes(db, pulados_payloads, lote)
+    except Exception as e:
+        db.rollback()
+        falhas.append(f"reconciliação de pares existentes: {e}")
+
     return {
         "lote": lote,
         "jobs": jobs_ok,
         "itens": itens_ok,
         "pulados_duplicados": pulados,
+        "itens_reconciliados": itens_reconciliados,
+        "jobs_reenfileirados": jobs_reenfileirados,
         "falhas": falhas[:MAX_ERROS_RETORNO],
     }
 
@@ -313,7 +409,10 @@ def criar_jobs_background(payloads: list[dict], filename: str, lote: str):
         try:
             resumo = criar_jobs_evolucao(db, payloads, filename, lote)
             print(f"[evolucoes] lote {lote}: {resumo['jobs']} jobs / {resumo['itens']} itens criados, "
-                  f"{resumo['pulados_duplicados']} duplicados pulados, falhas={len(resumo['falhas'])}")
+                  f"{resumo['pulados_duplicados']} pares ja existentes "
+                  f"({resumo.get('itens_reconciliados', 0)} itens reconciliados, "
+                  f"{resumo.get('jobs_reenfileirados', 0)} jobs reenfileirados), "
+                  f"falhas={len(resumo['falhas'])}")
         finally:
             db.close()
     except Exception as e:
