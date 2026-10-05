@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from dependencies import get_current_user
-from models import EvolucaoItem, User
+from models import EvolucaoItem, Job, User
 from services import evolucao_service
 
 router = APIRouter(prefix="/evolucoes", tags=["Evolucoes"])
@@ -86,6 +86,74 @@ async def upload_evolucoes(
         "itens_duplicados": itens_duplicados,
         "incrementoMin": incremento_min,
         "erros_planilha": erros[:50],
+    }
+
+
+@router.post("/reprocessar-pendentes")
+def reprocessar_pendentes(
+    lote: str | None = Query(None, description="Filtrar por lote (nome do upload)"),
+    job_id: int | None = Query(None, description="Filtrar por job específico"),
+    incluir_erros: bool = Query(False, description="Incluir também itens ERRO (ex.: PDF sem link)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Reenfileira jobs FINALIZADOS que possuem itens PENDENTE (opcionalmente ERRO).
+
+    A retomada do worker pula itens já OK: apenas os pendentes/erro ganham nova
+    tentativa de conciliação + PDF. As reservas (evolucao_claims) dos itens OK
+    permanecem com o próprio job — nada é regravado indevidamente. Jobs já
+    pendentes/processing na fila não são tocados (serão processados de qualquer
+    forma, e os pendentes deles também reprocessam).
+    """
+    statuses = ("PENDENTE", "ERRO") if incluir_erros else ("PENDENTE",)
+
+    filtros = [Job.rotina == evolucao_service.ROTINA_EVOLUCAO,
+               EvolucaoItem.status.in_(statuses)]
+    if lote:
+        filtros.append(EvolucaoItem.lote == lote)
+    if job_id:
+        filtros.append(Job.id == job_id)
+
+    job_ids = [r[0] for r in db.query(Job.id).join(
+        EvolucaoItem, EvolucaoItem.job_id == Job.id
+    ).filter(*filtros).distinct().all()]
+
+    from datetime import datetime
+    reenfileirados = 0
+    ja_na_fila = 0
+    for jid in job_ids:
+        job = db.query(Job).filter(Job.id == jid).first()
+        if job.status in ("pending", "processing"):
+            ja_na_fila += 1  # já vai processar (itens não-OK reprocessam na retomada)
+            continue
+        job.status = "pending"
+        job.attempts = 0
+        job.locked_by = None
+        job.updated_at = datetime.utcnow()
+        reenfileirados += 1
+
+    # Itens presos em PROCESSANDO (worker interrompido) voltam a PENDENTE
+    db.query(EvolucaoItem).filter(EvolucaoItem.status == "PROCESSANDO").update(
+        {"status": "PENDENTE"}, synchronize_session=False)
+
+    db.commit()
+
+    itens_alvo = 0
+    if job_ids:
+        itens_alvo = db.query(EvolucaoItem).filter(
+            EvolucaoItem.job_id.in_(job_ids),
+            EvolucaoItem.status.in_(statuses),
+        ).count()
+
+    return {
+        "jobs_com_itens_pendentes": len(job_ids),
+        "jobs_reenfileirados": reenfileirados,
+        "jobs_ja_na_fila": ja_na_fila,
+        "itens_alvo": itens_alvo,
+        "filtros": {"lote": lote, "job_id": job_id, "incluir_erros": incluir_erros},
+        "mensagem": f"{reenfileirados} job(s) reenfileirado(s) — o worker reprocessará apenas os itens "
+                    f"não concluídos ({itens_alvo} itens). Itens OK não são afetados."
+        if reenfileirados else "Nenhum job finalizado com itens pendentes no filtro informado.",
     }
 
 
