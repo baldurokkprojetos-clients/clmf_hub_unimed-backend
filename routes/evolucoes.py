@@ -130,6 +130,14 @@ def reprocessar_pendentes(
         job.attempts = 0
         job.locked_by = None
         job.updated_at = datetime.utcnow()
+        # Flag de REPROCESSO: o worker, nesta modalidade, ignora claims na
+        # seleção — itens pendentes podem usar QUALQUER candidato da janela,
+        # inclusive já utilizados por outros jobs/itens (gravação sobrescreve
+        # o atendimento no portal), mantendo exclusividade apenas dentro da
+        # própria execução.
+        params = dict(job.params or {})
+        params["reprocesso"] = True
+        job.params = params
         reenfileirados += 1
 
     # Itens presos em PROCESSANDO (worker interrompido) voltam a PENDENTE
