@@ -91,19 +91,19 @@ async def upload_evolucoes(
 
 @router.post("/reprocessar-pendentes")
 def reprocessar_pendentes(
-    lote: str | None = Query(None, description="Filtrar por lote (nome do upload)"),
-    job_id: int | None = Query(None, description="Filtrar por job específico"),
+    lote: str = Query(..., description="LOTE OBRIGATÓRIO — reprocessar é sempre escopado a um lote (nunca global)"),
+    job_id: int | None = Query(None, description="Restringir a um job específico dentro do lote"),
     incluir_erros: bool = Query(False, description="Incluir também itens ERRO (ex.: PDF sem link)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Reenfileira jobs FINALIZADOS que possuem itens PENDENTE (opcionalmente ERRO).
+    """Reenfileira, DO LOTE INFORMADO, os jobs finalizados com itens PENDENTE.
 
-    A retomada do worker pula itens já OK: apenas os pendentes/erro ganham nova
-    tentativa de conciliação + PDF. As reservas (evolucao_claims) dos itens OK
-    permanecem com o próprio job — nada é regravado indevidamente. Jobs já
-    pendentes/processing na fila não são tocados (serão processados de qualquer
-    forma, e os pendentes deles também reprocessam).
+    O lote é obrigatório por design: reprocesso global misturaria itens de
+    lotes diferentes. Não cria jobs novos — o mesmo job é reexecutado e a
+    retomada do worker pula itens OK: ex. num job com 6 itens (2 OK, 4
+    PENDENTE), apenas os 4 pendentes ganham nova tentativa de conciliação + PDF.
+    As reservas (evolucao_claims) dos itens OK permanecem com o próprio job.
     """
     statuses = ("PENDENTE", "ERRO") if incluir_erros else ("PENDENTE",)
 
