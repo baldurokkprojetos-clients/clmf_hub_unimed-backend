@@ -99,20 +99,26 @@ async def run_unimed_cron_loop():
                 last_cron_date_clear = now.date()
                 
             # 23:01 GMT+00 (20:01 Brasília) - Criar Jobs (Unimed Goiania id_pagamento=3)
+            # Pausável via env: UNIMED_CRON_ENABLED=false (Render Environment)
             if now.hour == 23 and now.minute == 1 and last_cron_date_jobs != now.date():
-                db = SessionLocal()
-                try:
-                    from services import job_service
-                    # id_pagamento=3 é Unimed Goiania (hardcoded conforme configuração do sistema)
-                    total_created = job_service.create_all_jobs(db, id_convenio=3)
-                    db.commit()
-                    print(f"CRON (23:01 GMT+00): {total_created} jobs enfileirados para Unimed Goiania (id=3).")
-                except Exception as e:
-                    db.rollback()
-                    print(f"CRON (23:01 GMT+00) ERRO: {e}")
-                finally:
-                    db.close()
-                last_cron_date_jobs = now.date()
+                import os as _os
+                if _os.getenv("UNIMED_CRON_ENABLED", "true").lower() == "false":
+                    print("CRON (23:01 GMT+00): criação de jobs Unimed PAUSADA (UNIMED_CRON_ENABLED=false).")
+                    last_cron_date_jobs = now.date()
+                else:
+                    db = SessionLocal()
+                    try:
+                        from services import job_service
+                        # id_pagamento=3 é Unimed Goiania (hardcoded conforme configuração do sistema)
+                        total_created = job_service.create_all_jobs(db, id_convenio=3)
+                        db.commit()
+                        print(f"CRON (23:01 GMT+00): {total_created} jobs enfileirados para Unimed Goiania (id=3).")
+                    except Exception as e:
+                        db.rollback()
+                        print(f"CRON (23:01 GMT+00) ERRO: {e}")
+                    finally:
+                        db.close()
+                    last_cron_date_jobs = now.date()
                 
         except Exception as e:
             print(f"Unimed Cron Loop Error: {e}")
