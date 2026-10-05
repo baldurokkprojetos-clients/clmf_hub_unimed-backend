@@ -182,7 +182,19 @@ check("pool insuficiente devolve parcial", [c["id"] for c in sel] == [1059574, 1
 hi, hf = CLMFScraper._hora_hhmm_para_request("0700")
 check("hora 0700 → 07:00/08:00", hi == "07:00" and hf == "08:00", f"{hi}/{hf}")
 hi, hf = CLMFScraper._hora_hhmm_para_request("2330")
-check("edge 2330 → 23:30/00:30", hi == "23:30" and hf == "00:30", f"{hi}/{hf}")
+check("edge 2330 (+60) → 23:30/00:30", hi == "23:30" and hf == "00:30", f"{hi}/{hf}")
+
+# incremento 30min (casos da spec)
+hi, hf = CLMFScraper._hora_hhmm_para_request("0800", 30)
+check("0800 +30min → 08:00/08:30", hi == "08:00" and hf == "08:30", f"{hi}/{hf}")
+hi, hf = CLMFScraper._hora_hhmm_para_request("0830", 30)
+check("0830 +30min → 08:30/09:00", hi == "08:30" and hf == "09:00", f"{hi}/{hf}")
+hi, hf = CLMFScraper._hora_hhmm_para_request("0800", 60)
+check("0800 +60min → 08:00/09:00", hi == "08:00" and hf == "09:00", f"{hi}/{hf}")
+hi, hf = CLMFScraper._hora_hhmm_para_request("2345", 30)
+check("edge 2345 +30min → 23:45/00:15", hi == "23:45" and hf == "00:15", f"{hi}/{hf}")
+hi, hf = CLMFScraper._hora_hhmm_para_request("0700")  # default retrocompatível = 60
+check("default sem incremento continua 60 (0700 → 08:00)", hf == "08:00", f"{hi}/{hf}")
 
 print()
 print("RESULTADO:", "TODOS OS CASOS OK" if not FALHAS else f"{len(FALHAS)} FALHA(S): {FALHAS}")

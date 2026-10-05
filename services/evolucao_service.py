@@ -208,7 +208,8 @@ def _pares_existentes(db: Session) -> set[tuple[str, str]]:
     return {(r[0], r[1]) for r in rows if r[0] is not None}
 
 
-def _reconciliar_pares_existentes(db: Session, pulados_payloads: list[dict], lote: str) -> tuple[int, int]:
+def _reconciliar_pares_existentes(db: Session, pulados_payloads: list[dict], lote: str,
+                                  incremento_min: int = 60) -> tuple[int, int]:
     """Reconcilia itens de pares que JÁ têm job (upload os pula na criação).
 
     O worker processa params["itens"] do job (não a tabela): sem o merge, itens
@@ -251,6 +252,7 @@ def _reconciliar_pares_existentes(db: Session, pulados_payloads: list[dict], lot
             continue
 
         params = dict(job.params)
+        params["incrementoMin"] = incremento_min  # incremento vigente do upload
         itens_params = [dict(i) for i in params.get("itens", [])]
         index = {(i["guia"], i["ID_prof"]): i for i in itens_params}
         novos = []
@@ -333,10 +335,18 @@ def _itens_do_payload(job_id: int, payload: dict, lote: str) -> list[EvolucaoIte
     return out
 
 
-def criar_jobs_evolucao(db: Session, payloads: list[dict], filename: str, lote: str | None = None) -> dict:
+def criar_jobs_evolucao(db: Session, payloads: list[dict], filename: str, lote: str | None = None,
+                        incremento_min: int = 60) -> dict:
     """Cria 1 job por (idPaciente, DataExec) a partir de payloads JÁ parseados,
     com dedup de pares existentes e commits em lote (CRIACAO_BATCH_JOBS).
-    Falha em um lote não derruba os demais (isolamento por lote)."""
+    Falha em um lote não derruba os demais (isolamento por lote).
+
+    incremento_min: duração da sessão — horaFinal = horaInicial + incremento
+    (60 = 1h, padrão/histórico; 30 = 30min). Vai no params do job como
+    'incrementoMin'; jobs sem o campo continuam em 60 (retrocompatível). Jobs
+    reconciliados (pares já existentes tocados pelo upload) também são
+    reflagados com o incremento vigente.
+    """
     ancora = db.query(Carteirinha).filter(Carteirinha.carteirinha == CARTEIRINHA_ANCORA).first()
     if not ancora:
         raise RuntimeError(f"Carteirinha ancora '{CARTEIRINHA_ANCORA}' ausente — rode a migration 0032.")
@@ -356,7 +366,7 @@ def criar_jobs_evolucao(db: Session, payloads: list[dict], filename: str, lote: 
             pulados_payloads.append(payload)
             continue
         existentes.add(chave)
-        pendentes.append({**payload, **credenciais})
+        pendentes.append({**payload, "incrementoMin": incremento_min, **credenciais})
 
         if len(pendentes) >= CRIACAO_BATCH_JOBS:
             try:
@@ -380,7 +390,8 @@ def criar_jobs_evolucao(db: Session, payloads: list[dict], filename: str, lote: 
     # params + insert PENDENTE + reenfileira job terminal)
     itens_reconciliados = jobs_reenfileirados = 0
     try:
-        itens_reconciliados, jobs_reenfileirados = _reconciliar_pares_existentes(db, pulados_payloads, lote)
+        itens_reconciliados, jobs_reenfileirados = _reconciliar_pares_existentes(
+            db, pulados_payloads, lote, incremento_min)
     except Exception as e:
         db.rollback()
         falhas.append(f"reconciliação de pares existentes: {e}")
@@ -392,11 +403,12 @@ def criar_jobs_evolucao(db: Session, payloads: list[dict], filename: str, lote: 
         "pulados_duplicados": pulados,
         "itens_reconciliados": itens_reconciliados,
         "jobs_reenfileirados": jobs_reenfileirados,
+        "incrementoMin": incremento_min,
         "falhas": falhas[:MAX_ERROS_RETORNO],
     }
 
 
-def criar_jobs_background(payloads: list[dict], filename: str, lote: str):
+def criar_jobs_background(payloads: list[dict], filename: str, lote: str, incremento_min: int = 60):
     """Executa a criação de jobs em thread própria (session dedicada).
 
     Upload de planilhas grandes (20k+ linhas) não pode travar o event loop nem
@@ -407,7 +419,7 @@ def criar_jobs_background(payloads: list[dict], filename: str, lote: str):
         from database import SessionLocal
         db = SessionLocal()
         try:
-            resumo = criar_jobs_evolucao(db, payloads, filename, lote)
+            resumo = criar_jobs_evolucao(db, payloads, filename, lote, incremento_min=incremento_min)
             print(f"[evolucoes] lote {lote}: {resumo['jobs']} jobs / {resumo['itens']} itens criados, "
                   f"{resumo['pulados_duplicados']} pares ja existentes "
                   f"({resumo.get('itens_reconciliados', 0)} itens reconciliados, "

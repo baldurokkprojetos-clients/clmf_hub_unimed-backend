@@ -8,7 +8,7 @@ Rotas da OP2 ImprimirEvolucao (rotina 'clmf_imprimir_evolucao').
 """
 import threading
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from sqlalchemy import case, func, or_
@@ -25,11 +25,16 @@ router = APIRouter(prefix="/evolucoes", tags=["Evolucoes"])
 @router.post("/upload")
 async def upload_evolucoes(
     file: UploadFile = File(...),
+    incremento_min: int = Form(60),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     if not (file.filename or "").lower().endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="Envie um arquivo .xlsx (planilha modelo de evolucoes).")
+
+    # Duração da sessão: horaFinal = horaInicial + incremento (60=1h, 30=30min)
+    if incremento_min not in (30, 60):
+        raise HTTPException(status_code=422, detail="incremento_min deve ser 60 (1h) ou 30 (30min).")
 
     contents = await file.read()
     await file.close()
@@ -62,7 +67,7 @@ async def upload_evolucoes(
     lote = evolucao_service.nome_lote(file.filename)
     threading.Thread(
         target=evolucao_service.criar_jobs_background,
-        args=(payloads, file.filename, lote),
+        args=(payloads, file.filename, lote, incremento_min),
         daemon=True,
         name=f"evolucoes-upload-{lote}",
     ).start()
@@ -77,6 +82,7 @@ async def upload_evolucoes(
         "pacientes": len({p["idPaciente"] for p in payloads}),
         "pares_duplicados": pares_duplicados,
         "itens_duplicados": itens_duplicados,
+        "incrementoMin": incremento_min,
         "erros_planilha": erros[:50],
     }
 
