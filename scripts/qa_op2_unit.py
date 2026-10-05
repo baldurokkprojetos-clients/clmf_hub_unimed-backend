@@ -178,6 +178,20 @@ sel = selecionar_candidatos(cands, {1059571, 1059572}, D, TER, PROF, 4)
 check("pool insuficiente devolve parcial", [c["id"] for c in sel] == [1059574, 1059573, 1059575],
       str([c["id"] for c in sel]))
 
+# ─── reprocessamento: priorizar_vazios=False (preenchidos em igualdade) ───
+# N=1: com preferência por vazios, 1059572 (vazio) vem antes do 1059571 (preenchido);
+# no reprocessamento, sem preferência → ordem estável por id dentro da camada
+sel = selecionar_candidatos(cands, set(), D, TER, PROF, 1, priorizar_vazios=True)
+check("primeira execucao: vazio antes do preenchido", sel[0]["id"] == 1059572)
+sel = selecionar_candidatos(cands, set(), D, TER, PROF, 1, priorizar_vazios=False)
+check("reprocessamento: preenchido elegivel em igualdade (ordem por id)", sel[0]["id"] == 1059571)
+sel = selecionar_candidatos(cands, {1059572}, D, TER, PROF, 2, priorizar_vazios=False)
+check("reprocessamento: preenchidos cobrem N sem vazios disponiveis",
+      [c["id"] for c in sel] == [1059571, 1059574], str([c["id"] for c in sel]))
+sel = selecionar_candidatos(cands, {1059571, 1059572, 1059574}, D, TER, PROF, 1, priorizar_vazios=False)
+check("reprocessamento: id do proprio job excluido nao e reoferecido",
+      [c["id"] for c in sel] == [1059573], str([c["id"] for c in sel]))
+
 # ─── 5) horas ──────────────────────────────────────────────────────────────
 hi, hf = CLMFScraper._hora_hhmm_para_request("0700")
 check("hora 0700 → 07:00/08:00", hi == "07:00" and hf == "08:00", f"{hi}/{hf}")
