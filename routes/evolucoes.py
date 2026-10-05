@@ -50,10 +50,9 @@ async def upload_evolucoes(
             "Nenhuma linha valida encontrada na planilha. "
             f"Primeiros erros: {'; '.join(erros[:5]) or 'planilha sem dados'}"))
 
-    # Estimativa honesta ANTES do background: pares que já têm job e itens do
-    # arquivo ligados a eles (esses itens serão RECONCILIADOS nos jobs
-    # existentes — os que faltam entram como PENDENTE, os já processados
-    # mantêm o status atual)
+    # Estimativas ANTES do background: total do arquivo × pares que JÁ têm job
+    # (estes serão IGNORADOS — o upload não reconcilia nem reprocessa nada;
+    # cria exclusivamente jobs novos com o conteúdo da planilha enviada)
     existentes = evolucao_service._pares_existentes(db)
     pares_duplicados = sum(
         1 for p in payloads if (str(p["idPaciente"]), p["dataExec"]) in existentes)
@@ -75,9 +74,12 @@ async def upload_evolucoes(
     return {
         "lote": lote,
         "background": True,
-        "mensagem": "Planilha validada — criação dos jobs em andamento em segundo plano. "
+        "mensagem": "Planilha validada — criação dos jobs NOVOS em segundo plano. "
+                    f"{pares_duplicados} par(es) (paciente+data) já possuem job de lote anterior "
+                    "e foram ignorados (o upload não reprocessa). "
                     "Acompanhe o progresso no painel abaixo (atualiza a cada 5s).",
         "jobs": len(payloads),
+        "jobs_novos_previstos": len(payloads) - pares_duplicados,
         "itens": sum(len(i["horas"]) for p in payloads for i in p["itens"]),
         "pacientes": len({p["idPaciente"] for p in payloads}),
         "pares_duplicados": pares_duplicados,
