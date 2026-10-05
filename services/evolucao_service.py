@@ -209,17 +209,25 @@ def _pares_existentes(db: Session) -> set[tuple[str, str]]:
 
 
 def _reconciliar_pares_existentes(db: Session, pulados_payloads: list[dict], lote: str,
-                                  incremento_min: int = 60) -> tuple[int, int]:
-    """Reconcilia itens de pares que JÁ têm job (upload os pula na criação).
+                                  incremento_min: int = 60) -> tuple[int, int, int]:
+    """Reconcilia pares que JÁ têm job (upload os pula na criação).
 
     O worker processa params["itens"] do job (não a tabela): sem o merge, itens
     novos do arquivo (guias/horas que o lote anterior não tinha) nunca rodariam.
-    Faz: (1) merge das chaves faltantes no params, (2) insert de itens PENDENTE,
-    (3) reenfileira job terminal (a retomada do worker pula itens já OK).
-    Retorna (itens_reconciliados, jobs_reenfileirados).
+    Para cada par tocado: (1) merge das chaves faltantes no params, (2) insert
+    de itens PENDENTE, (3) reenfileira job terminal.
+
+    Mudança de incremento: se o incremento do upload difere do gravado no job
+    (ex.: re-upload escolhendo 30min num par processado com 1h), o par é
+    REPROCESSADO por completo — claims liberadas, itens voltam a PENDENTE e o
+    job é reenfileirado (worker re-grava data/horas com o novo horaFinal e
+    regrava o PDF, sobrescrevendo o arquivo).
+    Retorna (itens_reconciliados, jobs_reenfileirados, jobs_reprocessados).
     """
     if not pulados_payloads:
-        return 0, 0
+        return 0, 0, 0
+
+    from models import EvolucaoClaim
 
     pares = {(str(p["idPaciente"]), p["dataExec"]) for p in pulados_payloads}
     jobs = db.query(Job).filter(Job.rotina == ROTINA_EVOLUCAO).all()
@@ -236,7 +244,7 @@ def _reconciliar_pares_existentes(db: Session, pulados_payloads: list[dict], lot
         for r in rows:
             chaves_por_job.setdefault(r[0], set()).add((r[1], r[2], r[3]))
 
-    itens_ok, jobs_ok = 0, 0
+    itens_ok, jobs_ok, reprocessados = 0, 0, 0
     for p in pulados_payloads:
         job = job_por_par.get((str(p["idPaciente"]), p["dataExec"]))
         if not job:
@@ -248,8 +256,10 @@ def _reconciliar_pares_existentes(db: Session, pulados_payloads: list[dict], lot
             for h in it["horas"]:
                 if (it["guia"], it["ID_prof"], h) not in existentes:
                     faltantes.setdefault((it["guia"], it["ID_prof"]), []).append(h)
-        if not faltantes:
-            continue
+
+        mudou_incremento = job.params.get("incrementoMin") != incremento_min
+        if not faltantes and not mudou_incremento:
+            continue  # par idêntico (mesmo incremento, nada faltando): dedup puro
 
         params = dict(job.params)
         params["incrementoMin"] = incremento_min  # incremento vigente do upload
@@ -277,7 +287,19 @@ def _reconciliar_pares_existentes(db: Session, pulados_payloads: list[dict], lot
         params["itens"] = itens_params
         job.params = params  # reatribuição para o SQLAlchemy detectar a mudança no JSONB
 
-        if job.status in ("success", "error"):
+        if mudou_incremento:
+            # Reprocesso completo do par com o novo incremento: libera candidatos
+            # reservados, zera o resultado e reenfileira (PDF será sobrescrito).
+            db.query(EvolucaoClaim).filter(EvolucaoClaim.job_id == job.id).delete(synchronize_session=False)
+            db.query(EvolucaoItem).filter(EvolucaoItem.job_id == job.id).update({
+                "status": "PENDENTE", "motivo": None, "pdf_path": None,
+                "ids_conciliados": None, "lote": lote,
+            }, synchronize_session=False)
+            job.status = "pending"
+            job.attempts = 0
+            job.locked_by = None
+            reprocessados += 1
+        elif job.status in ("success", "error"):
             job.status = "pending"
             job.attempts = 0
             job.locked_by = None
@@ -290,7 +312,7 @@ def _reconciliar_pares_existentes(db: Session, pulados_payloads: list[dict], lot
         except Exception:
             db.rollback()
             raise
-    return itens_ok, jobs_ok
+    return itens_ok, jobs_ok, reprocessados
 
 
 def _commit_lote_jobs(db: Session, payloads: list[dict], lote: str, ancora_id: int) -> int:
@@ -387,10 +409,11 @@ def criar_jobs_evolucao(db: Session, payloads: list[dict], filename: str, lote: 
             falhas.append(f"lote final de {len(pendentes)} jobs: {e}")
 
     # Pares que já tinham job: reconcilia itens novos do arquivo (merge no
-    # params + insert PENDENTE + reenfileira job terminal)
-    itens_reconciliados = jobs_reenfileirados = 0
+    # params + insert PENDENTE + reenfileira job terminal); mudança de
+    # incremento reprocessa o par por completo
+    itens_reconciliados = jobs_reenfileirados = jobs_reprocessados = 0
     try:
-        itens_reconciliados, jobs_reenfileirados = _reconciliar_pares_existentes(
+        itens_reconciliados, jobs_reenfileirados, jobs_reprocessados = _reconciliar_pares_existentes(
             db, pulados_payloads, lote, incremento_min)
     except Exception as e:
         db.rollback()
@@ -403,6 +426,7 @@ def criar_jobs_evolucao(db: Session, payloads: list[dict], filename: str, lote: 
         "pulados_duplicados": pulados,
         "itens_reconciliados": itens_reconciliados,
         "jobs_reenfileirados": jobs_reenfileirados,
+        "jobs_reprocessados": jobs_reprocessados,
         "incrementoMin": incremento_min,
         "falhas": falhas[:MAX_ERROS_RETORNO],
     }
@@ -423,7 +447,9 @@ def criar_jobs_background(payloads: list[dict], filename: str, lote: str, increm
             print(f"[evolucoes] lote {lote}: {resumo['jobs']} jobs / {resumo['itens']} itens criados, "
                   f"{resumo['pulados_duplicados']} pares ja existentes "
                   f"({resumo.get('itens_reconciliados', 0)} itens reconciliados, "
-                  f"{resumo.get('jobs_reenfileirados', 0)} jobs reenfileirados), "
+                  f"{resumo.get('jobs_reenfileirados', 0)} jobs reenfileirados, "
+                  f"{resumo.get('jobs_reprocessados', 0)} reprocessados por novo incremento "
+                  f"[{resumo.get('incrementoMin', 60)}min]), "
                   f"falhas={len(resumo['falhas'])}")
         finally:
             db.close()
