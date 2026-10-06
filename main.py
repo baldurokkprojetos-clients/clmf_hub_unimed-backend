@@ -2,7 +2,7 @@ import time
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base
-from routes import auth, carteirinhas, jobs, guias, logs, dashboard, debug_optimization, protocolo, evolucoes
+from routes import auth, carteirinhas, jobs, guias, logs, dashboard, debug_optimization, protocolo, evolucoes, cron
 
 # Create tables — retry on temporary DB unavailability (e.g. Supabase instability)
 for _attempt in range(3):
@@ -99,11 +99,23 @@ async def run_unimed_cron_loop():
                 last_cron_date_clear = now.date()
                 
             # 23:01 GMT+00 (20:01 Brasília) - Criar Jobs (Unimed Goiania id_pagamento=3)
-            # Pausável via env: UNIMED_CRON_ENABLED=false (Render Environment)
+            # Pausável pelo frontend (convenio 3 status inativo → /cron/unimed)
+            # ou via env UNIMED_CRON_ENABLED=false (corte geral). Padrão: ATIVO.
             if now.hour == 23 and now.minute == 1 and last_cron_date_jobs != now.date():
                 import os as _os
-                if _os.getenv("UNIMED_CRON_ENABLED", "true").lower() == "false":
-                    print("CRON (23:01 GMT+00): criação de jobs Unimed PAUSADA (UNIMED_CRON_ENABLED=false).")
+                from sqlalchemy import text as _text
+                env_pausa = _os.getenv("UNIMED_CRON_ENABLED", "true").lower() == "false"
+                cron_db_ativo = True
+                try:
+                    _db = SessionLocal()
+                    _row = _db.execute(_text("SELECT status FROM convenios WHERE id = 3")).fetchone()
+                    _db.close()
+                    cron_db_ativo = bool(_row) and _row[0] == "ativo"
+                except Exception as _e:
+                    print(f"CRON (23:01 GMT+00): falha ao ler status do convênio 3 (assume ATIVO): {_e}")
+                if env_pausa or not cron_db_ativo:
+                    print("CRON (23:01 GMT+00): criação de jobs Unimed PAUSADA "
+                          f"(env={env_pausa}, toggle_frontend={not cron_db_ativo}).")
                     last_cron_date_jobs = now.date()
                 else:
                     db = SessionLocal()
@@ -144,3 +156,4 @@ app.include_router(pei.router)
 app.include_router(debug_optimization.router)
 app.include_router(protocolo.router)
 app.include_router(evolucoes.router)
+app.include_router(cron.router)
