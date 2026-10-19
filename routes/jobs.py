@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from dependencies import get_current_user
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_
 from database import get_db
 from models import Job, Carteirinha
@@ -108,7 +108,17 @@ def list_jobs(
     
     # Order by priority desc, created_at asc
     total = query.count()
-    jobs = query.order_by(Job.priority.desc(), Job.created_at.desc()).limit(limit).offset(skip).all()
+    # joinedload: job_to_dict acessa carteirinha_rel — sem eager loading eram
+    # N+1 queries (1 por job). Backend (Render/EUA) ↔ Supabase (sa-east-1)
+    # ~180ms por round-trip: 25 jobs = ~5s só de lazy loads (travava o frontend).
+    jobs = (
+        query
+        .options(joinedload(Job.carteirinha_rel))
+        .order_by(Job.priority.desc(), Job.created_at.desc())
+        .limit(limit)
+        .offset(skip)
+        .all()
+    )
 
     def job_to_dict(j):
         return {
