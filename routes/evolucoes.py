@@ -51,8 +51,9 @@ async def upload_evolucoes(
             f"Primeiros erros: {'; '.join(erros[:5]) or 'planilha sem dados'}"))
 
     # Estimativas ANTES do background: total do arquivo × pares que JÁ têm job
-    # (estes serão IGNORADOS — o upload não reconcilia nem reprocessa nada;
-    # cria exclusivamente jobs novos com o conteúdo da planilha enviada)
+    # de lote anterior (estes serão REPROCESSADOS integralmente: todos os itens
+    # do arquivo voltam a PENDENTE no lote novo e os jobs finalizados são
+    # reenfileirados — o upload é a sessão, nada do arquivo é pulado)
     existentes = evolucao_service._pares_existentes(db)
     pares_duplicados = sum(
         1 for p in payloads if (str(p["idPaciente"]), p["dataExec"]) in existentes)
@@ -60,9 +61,10 @@ async def upload_evolucoes(
         sum(len(i["horas"]) for i in p["itens"])
         for p in payloads if (str(p["idPaciente"]), p["dataExec"]) in existentes)
 
-    # Criacao dos jobs em background: resposta imediata (nao trava o backend nem
-    # estoura timeout de proxy — Render). Progresso acompanhadivel no painel
-    # (/evolucoes/jobs) e a criacao e idempotente (pares existentes sao pulados).
+    # Criacao/reprocesso dos jobs em background: resposta imediata (nao trava o
+    # backend nem estoura timeout de proxy — Render). Progresso acompanhavel no
+    # painel (/evolucoes/jobs): pares ineditos viram jobs novos e pares ja
+    # importados sao reprocessados integralmente (_reconciliar_pares).
     lote = evolucao_service.nome_lote(file.filename)
     threading.Thread(
         target=evolucao_service.criar_jobs_background,
@@ -74,9 +76,10 @@ async def upload_evolucoes(
     return {
         "lote": lote,
         "background": True,
-        "mensagem": "Planilha validada — criação dos jobs NOVOS em segundo plano. "
+        "mensagem": "Planilha validada — processamento em segundo plano. "
                     f"{pares_duplicados} par(es) (paciente+data) já possuem job de lote anterior "
-                    "e foram ignorados (o upload não reprocessa). "
+                    "e serão reprocessados integralmente: todos os itens do arquivo voltam a "
+                    "PENDENTE no lote novo (PDFs baixados novamente). "
                     "Acompanhe o progresso no painel abaixo (atualiza a cada 5s).",
         "jobs": len(payloads),
         "jobs_novos_previstos": len(payloads) - pares_duplicados,

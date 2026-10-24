@@ -5,6 +5,10 @@ Responsabilidades:
   - parse da planilha modelo de evolucoes (openpyxl read_only)
   - agrupamento por (idPaciente, DataExec) -> 1 job por par, encadeando itens[guia/ID_prof](horas)
   - criacao dos jobs pendentes + itens PENDENTE em evolucao_itens
+  - reprocesso integral no upload: pares que ja possuem job tem TODOS os itens
+    do arquivo regravados como PENDENTE (lote novo) e jobs finalizados
+    reenfileirados com flag 'reprocesso' — o arquivo subido e a sessao, nada
+    do que ele contem e pulado
   - geracao do xlsx de status (compartilhado entre rota e script CLI)
 
 Planilha modelo (aba ativa; cabecalho na primeira linha):
@@ -23,6 +27,7 @@ import threading
 from datetime import date, datetime, timedelta
 
 from openpyxl import Workbook, load_workbook
+from sqlalchemy import tuple_
 from sqlalchemy.orm import Session
 
 from models import Carteirinha, EvolucaoItem, Job
@@ -46,6 +51,10 @@ MAX_ERROS_RETORNO = 50
 # Criacao de jobs em LOTES: 1 commit a cada N jobs (commit-por-job via WAN ao
 # Supabase custa ~1 job/s; com lote de 200, 10k jobs saem em ~1 min).
 CRIACAO_BATCH_JOBS = 200
+
+# Reconciliacao em LOTES: mesmo principio do CRIACAO_BATCH_JOBS — 1 commit a
+# cada N pares reprocessados (UPDATE de itens + merge de params + reenqueue).
+RECONCILIACAO_BATCH_PARES = 50
 
 
 # ─── Parsing de celulas ─────────────────────────────────────────────────────
@@ -197,14 +206,40 @@ def nome_lote(filename: str) -> str:
 def _pares_existentes(db: Session) -> set[tuple[str, str]]:
     """(idPaciente, dataExec) que JÁ possuem job da rotina (qualquer status).
 
-    O upload cria exclusivamente jobs NOVOS: pares já criados são ignorados
-    (e reportados no resumo) — nunca reconciliados ou reprocessados.
+    Projeção leve (2 colunas) para a estimativa do resumo do upload: pares
+    listados aqui serão REPROCESSADOS integralmente pelo upload — o arquivo
+    subido é a sessão e nenhum item dele é pulado.
     """
     rows = db.query(
         Job.params["idPaciente"].astext,
         Job.params["dataExec"].astext,
     ).filter(Job.rotina == ROTINA_EVOLUCAO).all()
     return {(r[0], r[1]) for r in rows if r[0] is not None}
+
+
+def _jobs_por_par(db: Session) -> dict[tuple[str, str], Job]:
+    """Jobs da rotina indexados por (idPaciente, dataExec) — qualquer status.
+
+    Usado pela reconciliação: o reprocesso acontece SEMPRE no job existente
+    do par (nunca cria segundo job — índice único uq_jobs_evolucao_par).
+    """
+    jobs = db.query(Job).filter(Job.rotina == ROTINA_EVOLUCAO).all()
+    return {(str(j.params["idPaciente"]), j.params["dataExec"]): j
+            for j in jobs if (j.params or {}).get("idPaciente") is not None}
+
+
+def _itens_por_job(db: Session, job_ids: list[int]) -> dict[int, dict[tuple[str, int, str], str]]:
+    """Itens dos jobs indexados por job_id → {(guia, profissional_id, hora): status}."""
+    if not job_ids:
+        return {}
+    rows = db.query(
+        EvolucaoItem.job_id, EvolucaoItem.guia, EvolucaoItem.profissional_id,
+        EvolucaoItem.hora_inicial, EvolucaoItem.status,
+    ).filter(EvolucaoItem.job_id.in_(job_ids)).all()
+    out: dict[int, dict[tuple[str, int, str], str]] = {}
+    for jid, guia, prof, hora, status in rows:
+        out.setdefault(jid, {})[(guia, prof, hora)] = status
+    return out
 
 
 def _commit_lote_jobs(db: Session, payloads: list[dict], lote: str, ancora_id: int) -> int:
@@ -249,17 +284,159 @@ def _itens_do_payload(job_id: int, payload: dict, lote: str) -> list[EvolucaoIte
     return out
 
 
+# ─── Reprocesso integral de pares já importados (upload = sessão) ───────────
+
+def _reconciliar_par(db: Session, payload: dict, job: Job,
+                     existentes: dict[tuple[str, int, str], str],
+                     lote: str, incremento_min: int) -> dict:
+    """Reprocessa integralmente, NO JOB EXISTENTE do par, um payload do arquivo.
+
+    (1) itens FALTANTES (no arquivo, não no job): merge em params["itens"] (o
+    worker processa params, não a tabela) + insert de EvolucaoItem PENDENTE;
+    (2) itens PRESENTES: TODO item do arquivo volta a PENDENTE com o lote novo
+    (status OK/ERRO/PENDENTE, motivo limpo) — a retomada do worker só pula
+    grupos 100% OK, logo todos são refeitos e os PDFs rebaixados;
+    (3) job finalizado (success/error) é reenfileirado com a flag 'reprocesso'
+    (a seleção do worker ignora claims antigos e habilita candidatos já
+    preenchidos — sem isso, os candidatos do run anterior continuam reservados
+    em evolucao_claims e os itens viram "candidatos insuficientes").
+
+    Job em 'processing': apenas (1) — a run em curso leu params no início e o
+    reset disputaria estado com o worker; o reprocesso fica adiado.
+    """
+    horas_por_grupo: dict[tuple[str, int], list[str]] = {}
+    for it in payload["itens"]:
+        hs = horas_por_grupo.setdefault((it["guia"], it["ID_prof"]), [])
+        for h in it["horas"]:
+            if h not in hs:
+                hs.append(h)
+    chaves_arquivo = {(g, p, h) for (g, p), hs in horas_por_grupo.items() for h in hs}
+    faltantes = chaves_arquivo - existentes.keys()
+    a_resetar = chaves_arquivo & existentes.keys()
+
+    stats = {"pares_reprocessados": 0, "itens_resetados": 0, "itens_novos": 0,
+             "jobs_reenfileirados": 0, "jobs_adiados": 0}
+
+    params = dict(job.params or {})
+    itens_params = [dict(i) for i in params.get("itens", [])]
+    index = {(i["guia"], i["ID_prof"]): i for i in itens_params}
+
+    if faltantes:
+        data_exec = date.fromisoformat(payload["dataExec"])
+        falt_por_grupo: dict[tuple[str, int], list[str]] = {}
+        for g, p, h in faltantes:
+            falt_por_grupo.setdefault((g, p), []).append(h)
+        novos_objs = []
+        for (guia, id_prof), horas in falt_por_grupo.items():
+            fonte = next(i for i in payload["itens"]
+                         if i["guia"] == guia and i["ID_prof"] == id_prof)
+            if (guia, id_prof) in index:
+                for h in horas:
+                    if h not in index[(guia, id_prof)]["horas"]:
+                        index[(guia, id_prof)]["horas"].append(h)
+                terapia_item = index[(guia, id_prof)].get("terapia", "")
+            else:
+                itens_params.append({"guia": guia, "ID_prof": id_prof,
+                                     "terapia": fonte["terapia"], "horas": list(horas)})
+                terapia_item = fonte["terapia"]
+            for h in horas:
+                novos_objs.append(EvolucaoItem(
+                    job_id=job.id, lote=lote, id_paciente=payload["idPaciente"],
+                    nome_paciente=payload.get("nomePaciente") or "", guia=guia,
+                    data_exec=data_exec, profissional_id=id_prof,
+                    terapia=terapia_item, hora_inicial=h, status="PENDENTE",
+                ))
+        params["itens"] = itens_params
+        db.add_all(novos_objs)
+        stats["itens_novos"] = len(novos_objs)
+
+    params["incrementoMin"] = incremento_min
+
+    if job.status == "processing":
+        job.params = params  # reatribuição p/ SQLAlchemy detectar mudança no JSONB
+        stats["jobs_adiados"] = 1
+        return stats
+
+    if a_resetar:
+        db.query(EvolucaoItem).filter(
+            EvolucaoItem.job_id == job.id,
+            tuple_(EvolucaoItem.guia, EvolucaoItem.profissional_id,
+                   EvolucaoItem.hora_inicial).in_(sorted(a_resetar)),
+        ).update({"status": "PENDENTE", "motivo": None, "lote": lote,
+                  "updated_at": datetime.utcnow()}, synchronize_session=False)
+        stats["itens_resetados"] = len(a_resetar)
+
+    if job.status in ("success", "error"):
+        params["reprocesso"] = True
+        job.status = "pending"
+        job.attempts = 0
+        job.locked_by = None
+        job.updated_at = datetime.utcnow()
+        stats["jobs_reenfileirados"] = 1
+    job.params = params  # reatribuição p/ SQLAlchemy detectar mudança no JSONB
+    stats["pares_reprocessados"] = 1
+    return stats
+
+
+def _reconciliar_pares(db: Session, pares: list[tuple[dict, Job]], lote: str,
+                       incremento_min: int) -> tuple[dict, list[str]]:
+    """Driver do reprocesso: 1 commit a cada RECONCILIACAO_BATCH_PARES pares,
+    com isolamento de falha por lote (mesma rationale de _commit_lote_jobs).
+    Retorna (stats, falhas)."""
+    itens_status = _itens_por_job(db, [job.id for _, job in pares])
+
+    stats = {"pares_reprocessados": 0, "itens_resetados": 0, "itens_novos": 0,
+             "jobs_reenfileirados": 0, "jobs_adiados": 0}
+    falhas: list[str] = []
+    em_lote: list[tuple[dict, dict]] = []
+
+    def _commit_lote():
+        try:
+            db.commit()
+            for _, res in em_lote:
+                for k, v in res.items():
+                    stats[k] += v
+        except Exception as e:
+            db.rollback()
+            primeiro = em_lote[0][0]
+            falhas.append(f"lote de {len(em_lote)} pares a partir de "
+                          f"{primeiro['idPaciente']}/{primeiro['dataExec']}: {e}")
+        em_lote.clear()
+
+    for payload, job in pares:
+        try:
+            res = _reconciliar_par(db, payload, job, itens_status.get(job.id, {}),
+                                   lote, incremento_min)
+        except Exception as e:
+            # rollback descarta também pares acumulados sem commit no lote corrente
+            db.rollback()
+            em_lote.clear()
+            falhas.append(f"par {payload['idPaciente']}/{payload['dataExec']}: {e}")
+            continue
+        em_lote.append((payload, res))
+        if len(em_lote) >= RECONCILIACAO_BATCH_PARES:
+            _commit_lote()
+    if em_lote:
+        _commit_lote()
+    return stats, falhas
+
+
 def criar_jobs_evolucao(db: Session, payloads: list[dict], filename: str, lote: str | None = None,
                         incremento_min: int = 60) -> dict:
-    """Cria 1 job por (idPaciente, DataExec) a partir de payloads JÁ parseados,
-    com dedup de pares existentes e commits em lote (CRIACAO_BATCH_JOBS).
-    Falha em um lote não derruba os demais (isolamento por lote).
+    """O upload é uma SESSÃO COMPLETA sobre o arquivo enviado:
+
+      - pares INÉDITOS (idPaciente, DataExec) → cria 1 job novo + itens
+        PENDENTE em evolucao_itens (commits em lote de CRIACAO_BATCH_JOBS,
+        com isolamento de falha por lote);
+      - pares que JÁ possuem job (qualquer lote/status) → reprocesso integral
+        via _reconciliar_pares: todo item do arquivo volta a PENDENTE com o
+        lote novo, itens faltantes são acrescentados ao job e jobs
+        finalizados são reenfileirados com a flag 'reprocesso'.
 
     incremento_min: duração da sessão — horaFinal = horaInicial + incremento
     (60 = 1h, padrão/histórico; 30 = 30min). Vai no params do job como
-    'incrementoMin'; jobs sem o campo continuam em 60 (retrocompatível). Jobs
-    reconciliados (pares já existentes tocados pelo upload) também são
-    reflagados com o incremento vigente.
+    'incrementoMin'; jobs sem o campo continuam em 60 (retrocompatível). Pares
+    reprocessados também são reflagados com o incremento vigente do upload.
     """
     ancora = db.query(Carteirinha).filter(Carteirinha.carteirinha == CARTEIRINHA_ANCORA).first()
     if not ancora:
@@ -267,17 +444,22 @@ def criar_jobs_evolucao(db: Session, payloads: list[dict], filename: str, lote: 
 
     lote = lote or nome_lote(filename)
     credenciais = _credenciais_params()
-    existentes = _pares_existentes(db)
+    jobs_por_par = _jobs_por_par(db)
 
-    jobs_ok, itens_ok, pulados, falhas = 0, 0, 0, []
+    jobs_ok, itens_ok, falhas = 0, 0, []
     pendentes: list[dict] = []
+    reconciliar: list[tuple[dict, Job]] = []
+    vistos: set[tuple[str, str]] = set()  # defesa extra: o parse já agrupa por par único
 
     for payload in payloads:
         chave = (str(payload["idPaciente"]), payload["dataExec"])
-        if chave in existentes:
-            pulados += 1  # par já possui job (qualquer lote): ignorado
+        if chave in vistos:
             continue
-        existentes.add(chave)
+        vistos.add(chave)
+        job = jobs_por_par.get(chave)
+        if job is not None:
+            reconciliar.append((payload, job))  # reprocesso integral no job existente
+            continue
         pendentes.append({**payload, "incrementoMin": incremento_min, **credenciais})
 
         if len(pendentes) >= CRIACAO_BATCH_JOBS:
@@ -298,25 +480,25 @@ def criar_jobs_evolucao(db: Session, payloads: list[dict], filename: str, lote: 
             db.rollback()
             falhas.append(f"lote final de {len(pendentes)} jobs: {e}")
 
-    # Sem reconciliação/reprocesso: o upload cria EXCLUSIVAMENTE jobs novos da
-    # planilha enviada. Pares (idPaciente, dataExec) que já possuem job — de
-    # qualquer lote anterior — são apenas ignorados e reportados no resumo.
-    return {
-        "lote": lote,
-        "jobs": jobs_ok,
-        "itens": itens_ok,
-        "pulados_duplicados": pulados,
-        "incrementoMin": incremento_min,
-        "falhas": falhas[:MAX_ERROS_RETORNO],
-    }
+    resumo = {"lote": lote, "jobs": jobs_ok, "itens": itens_ok,
+              "incrementoMin": incremento_min}
+    if reconciliar:
+        stats, falhas_rec = _reconciliar_pares(db, reconciliar, lote, incremento_min)
+        resumo.update(stats)
+        falhas.extend(falhas_rec)
+    else:
+        resumo.update({"pares_reprocessados": 0, "itens_resetados": 0,
+                       "itens_novos": 0, "jobs_reenfileirados": 0, "jobs_adiados": 0})
+    resumo["falhas"] = falhas[:MAX_ERROS_RETORNO]
+    return resumo
 
 
 def criar_jobs_background(payloads: list[dict], filename: str, lote: str, incremento_min: int = 60):
-    """Executa a criação de jobs em thread própria (session dedicada).
+    """Executa a criação/reprocesso em thread própria (session dedicada).
 
     Upload de planilhas grandes (20k+ linhas) não pode travar o event loop nem
-    estourar timeout do proxy (Render): o endpoint responde imediatamente e a
-    criação corre aqui; o progresso aparece no painel via /evolucoes/jobs.
+    estourar timeout do proxy (Render): o endpoint responde imediatamente e o
+    trabalho corre aqui; o progresso aparece no painel via /evolucoes/jobs.
     """
     try:
         from database import SessionLocal
@@ -324,8 +506,10 @@ def criar_jobs_background(payloads: list[dict], filename: str, lote: str, increm
         try:
             resumo = criar_jobs_evolucao(db, payloads, filename, lote, incremento_min=incremento_min)
             print(f"[evolucoes] lote {lote}: {resumo['jobs']} novos jobs / {resumo['itens']} itens criados "
-                  f"[incremento {resumo.get('incrementoMin', 60)}min], "
-                  f"{resumo['pulados_duplicados']} pares ja existentes IGNORADOS, "
+                  f"[incremento {resumo.get('incrementoMin', 60)}min]; "
+                  f"reprocesso: {resumo['pares_reprocessados']} pares "
+                  f"({resumo['itens_resetados']} itens resetados, {resumo['itens_novos']} itens novos, "
+                  f"{resumo['jobs_reenfileirados']} jobs reenfileirados, {resumo['jobs_adiados']} adiados), "
                   f"falhas={len(resumo['falhas'])}")
         finally:
             db.close()
