@@ -74,48 +74,60 @@ from datetime import datetime
 last_cron_date_clear = None
 last_cron_date_jobs = None
 
+def _cron_unimed_pausado() -> bool:
+    """Pausa do ciclo Unimed: env UNIMED_CRON_ENABLED=false ou toggle do
+    frontend (convenios.status do convênio 3, id_pagamento=3). Pausado = não
+    inativa guias (23:00) nem cria jobs (23:01) — congela o estado atual."""
+    import os as _os
+    from sqlalchemy import text as _text
+    if _os.getenv("UNIMED_CRON_ENABLED", "true").lower() == "false":
+        return True
+    try:
+        _db = SessionLocal()
+        _row = _db.execute(_text("SELECT status FROM convenios WHERE id = 3")).fetchone()
+        _db.close()
+        return not (bool(_row) and _row[0] == "ativo")
+    except Exception as _e:
+        print(f"CRON: falha ao ler status do convênio 3 (assume ATIVO): {_e}")
+        return False
+
 async def run_unimed_cron_loop():
     global last_cron_date_clear, last_cron_date_jobs
     while True:
         try:
             now = datetime.now()
             
-            # 23:00 GMT+00 (20:00 Brasília) - Limpar Guias e PEI (Unimed Goiania id_pagamento=3)
+            # 23:00 GMT+00 (20:00 Brasília) - Inativar Guias e PEI (Unimed Goiania id_pagamento=3)
+            # Guias/PEI não são mais apagados: guias sem atualização (updated_at) há mais
+            # de 24h ficam Inativas; o trigger calculate_patient_pei inativa/recalcula o
+            # patient_pei de cada par. Uma nova atualização da guia (worker) reativa o par.
             if now.hour == 23 and now.minute == 0 and last_cron_date_clear != now.date():
-                db = SessionLocal()
-                try:
-                    from sqlalchemy import text
-                    # Apaga tudo — pei_temp, patient_pei e base_guias não têm vínculo com convênio
-                    db.execute(text("DELETE FROM pei_temp"))
-                    db.execute(text("DELETE FROM patient_pei"))
-                    db.execute(text("DELETE FROM base_guias"))
-                    db.commit()
-                    print(f"CRON (23:00 GMT+00): pei_temp, patient_pei e base_guias limpos com sucesso.")
-                except Exception as e:
-                    db.rollback()
-                    print(f"CRON (23:00 GMT+00) ERRO DE BANCO: {e}")
-                finally:
-                    db.close()
+                if _cron_unimed_pausado():
+                    print("CRON (23:00 GMT+00): inativação de guias PAUSADA (env/toggle do frontend).")
+                else:
+                    db = SessionLocal()
+                    try:
+                        from sqlalchemy import text
+                        # Não altera updated_at — a idade da guia é o próprio critério
+                        result = db.execute(text(
+                            "UPDATE base_guias SET ativo = FALSE "
+                            "WHERE ativo = TRUE AND updated_at < NOW() - INTERVAL '24 hours'"
+                        ))
+                        db.commit()
+                        print(f"CRON (23:00 GMT+00): {result.rowcount} guias marcadas como inativas (sem atualização há mais de 24h).")
+                    except Exception as e:
+                        db.rollback()
+                        print(f"CRON (23:00 GMT+00) ERRO DE BANCO: {e}")
+                    finally:
+                        db.close()
                 last_cron_date_clear = now.date()
                 
             # 23:01 GMT+00 (20:01 Brasília) - Criar Jobs (Unimed Goiania id_pagamento=3)
             # Pausável pelo frontend (convenio 3 status inativo → /cron/unimed)
             # ou via env UNIMED_CRON_ENABLED=false (corte geral). Padrão: ATIVO.
             if now.hour == 23 and now.minute == 1 and last_cron_date_jobs != now.date():
-                import os as _os
-                from sqlalchemy import text as _text
-                env_pausa = _os.getenv("UNIMED_CRON_ENABLED", "true").lower() == "false"
-                cron_db_ativo = True
-                try:
-                    _db = SessionLocal()
-                    _row = _db.execute(_text("SELECT status FROM convenios WHERE id = 3")).fetchone()
-                    _db.close()
-                    cron_db_ativo = bool(_row) and _row[0] == "ativo"
-                except Exception as _e:
-                    print(f"CRON (23:01 GMT+00): falha ao ler status do convênio 3 (assume ATIVO): {_e}")
-                if env_pausa or not cron_db_ativo:
-                    print("CRON (23:01 GMT+00): criação de jobs Unimed PAUSADA "
-                          f"(env={env_pausa}, toggle_frontend={not cron_db_ativo}).")
+                if _cron_unimed_pausado():
+                    print("CRON (23:01 GMT+00): criação de jobs Unimed PAUSADA (env/toggle do frontend).")
                     last_cron_date_jobs = now.date()
                 else:
                     db = SessionLocal()
