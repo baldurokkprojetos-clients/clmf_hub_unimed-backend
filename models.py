@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, Text, Float, Boolean, JSON, BigInteger
+from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, Text, Float, Boolean, JSON, BigInteger, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -88,8 +88,10 @@ class BaseGuia(Base):
     validade = Column(Date, index=True)
     codigo_procedimento = Column(Text, index=True)
     qtde_solicitada = Column(Integer)
+    qtde_solicitada_pei = Column(Integer)  # valor-base do PEI congelado na 1ª inserção (trigger freeze_guia_pei_base)
     sessoes_autorizadas = Column(Integer)
     valida_prestador = Column(JSONB, nullable=True)
+    ativo = Column(Boolean, nullable=False, default=True, server_default=text("TRUE"), index=True)  # inativa após 24h sem atualização (cron)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), index=True)
 
@@ -116,6 +118,7 @@ class PatientPei(Base):
     pei_semanal = Column(Float)
     validade = Column(Date, index=True)
     status = Column(Text, index=True) # Validated, Pendente
+    ativo = Column(Boolean, nullable=False, default=True, server_default=text("TRUE"), index=True)  # inativo quando a guia-base do par está inativa
     
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), index=True)
 

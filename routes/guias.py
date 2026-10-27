@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from database import get_db
 from dependencies import get_current_user
 from models import BaseGuia, Carteirinha
@@ -14,20 +15,57 @@ router = APIRouter(
     tags=["Guias"]
 )
 
+def apply_guia_filters(query, guia: Optional[str], status: Optional[str], validacao: Optional[str]):
+    """Filtros compartilhados entre listagem e export (manter os dois endpoints em sync).
+
+    status:    'ativa' | 'inativa' — ciclo de vida da guia (cron inativa após 24h sem atualização)
+    validacao: vínculo do prestador, mesmas regras dos ícones da tela Base Guias
+    """
+    if guia:
+        query = query.filter(BaseGuia.guia.ilike(f"%{guia}%"))
+
+    if status == 'ativa':
+        query = query.filter(BaseGuia.ativo == True)
+    elif status == 'inativa':
+        query = query.filter(BaseGuia.ativo == False)
+
+    vinculo = BaseGuia.valida_prestador['Vinculo_prestador'].astext
+    if validacao == 'valida':
+        query = query.filter(vinculo.like('Guia V%lida'))
+    elif validacao == 'bloqueada':
+        query = query.filter(
+            vinculo.isnot(None),
+            vinculo != '',
+            vinculo != 'Null',
+            ~vinculo.like('Guia V%lida')
+        )
+    elif validacao == 'sem_validacao':
+        query = query.filter(or_(
+            BaseGuia.valida_prestador.is_(None),
+            vinculo.is_(None),
+            vinculo == '',
+            vinculo == 'Null'
+        ))
+
+    return query
+
 @router.get("/")
 def list_guias(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
-    created_at_start: Optional[date] = None, 
+    created_at_start: Optional[date] = None,
     created_at_end: Optional[date] = None,
     carteirinha_id: Optional[int] = None,
+    guia: Optional[str] = Query(None, description="Busca parcial pelo número da guia"),
+    status: Optional[str] = Query(None, description="ativa | inativa"),
+    validacao: Optional[str] = Query(None, description="valida | bloqueada | sem_validacao"),
     limit: int = 25,
     skip: int = 0,
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
     query = db.query(BaseGuia)
-    
+
     if created_at_start:
         query = query.filter(BaseGuia.updated_at >= created_at_start)
     if created_at_end:
@@ -37,9 +75,11 @@ def list_guias(
     if carteirinha_id:
         query = query.filter(BaseGuia.carteirinha_id == carteirinha_id)
 
+    query = apply_guia_filters(query, guia, status, validacao)
+
     total = query.count()
     guias = query.order_by(BaseGuia.created_at.desc()).limit(limit).offset(skip).all()
-    
+
     return {"data": guias, "total": total, "skip": skip, "limit": limit}
 
 @router.get("/export")
@@ -47,6 +87,9 @@ def export_guias(
     created_at_start: Optional[str] = Query(None, description="Start Date (YYYY-MM-DD)"),
     created_at_end: Optional[str] = Query(None, description="End Date (YYYY-MM-DD)"),
     carteirinha_id: Optional[int] = Query(None, description="Filter by Carteirinha ID"),
+    guia: Optional[str] = Query(None, description="Busca parcial pelo número da guia"),
+    status: Optional[str] = Query(None, description="ativa | inativa"),
+    validacao: Optional[str] = Query(None, description="valida | bloqueada | sem_validacao"),
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
@@ -54,16 +97,17 @@ def export_guias(
     try:
         wb = Workbook(write_only=True)
         ws = wb.create_sheet("Guias")
-        
-        headers = ["Carteirinha", "Paciente", "Guia", "Data_Autorização", "Senha", 
-                   "Validade", "Código_Terapia", "Descrição Procedimento", "Status Prestador", "Qtde_Solicitada", "Sessões Autorizadas", "Importado_Em"]
+
+        headers = ["Carteirinha", "Paciente", "Guia", "Data_Autorização", "Senha",
+                   "Validade", "Código_Terapia", "Descrição Procedimento", "Status Prestador", "Ativa",
+                   "Qtde_Solicitada", "Sessões Autorizadas", "Importado_Em"]
         ws.append(headers)
-        
+
         # Helper to format date
         def fmt_date(d):
             return d.strftime("%d/%m/%Y") if d else ""
 
-        
+
         print("DEBUG: Executing Query with raw tuples...")
         # Use yield_per to reduce memory overhead and tuple selection to avoid N+1 and lazy loading issues
         query = db.query(
@@ -77,7 +121,8 @@ def export_guias(
             BaseGuia.qtde_solicitada,        # 7
             BaseGuia.sessoes_autorizadas,    # 8
             BaseGuia.created_at,             # 9
-            BaseGuia.valida_prestador        # 10
+            BaseGuia.valida_prestador,       # 10
+            BaseGuia.ativo                   # 11
         ).select_from(BaseGuia).join(Carteirinha, BaseGuia.carteirinha_id == Carteirinha.id)
 
         if created_at_start:
@@ -88,9 +133,11 @@ def export_guias(
             query = query.filter(BaseGuia.updated_at <= str(end_dt))
         if carteirinha_id:
             query = query.filter(BaseGuia.carteirinha_id == carteirinha_id)
-        
+
+        query = apply_guia_filters(query, guia, status, validacao)
+
         results = query.yield_per(1000)
-        
+
         count = 0
         for row in results:
             count += 1
@@ -104,6 +151,7 @@ def export_guias(
                 row.codigo_procedimento,
                 row.valida_prestador.get("descricao_procedimento") if row.valida_prestador else "",
                 row.valida_prestador.get("Vinculo_prestador") if row.valida_prestador else "",
+                "Sim" if row.ativo else "Não",
                 row.qtde_solicitada,
                 row.sessoes_autorizadas,
                 row.created_at.strftime("%d/%m/%Y %H:%M:%S") if row.created_at else ""
@@ -113,7 +161,7 @@ def export_guias(
         output = io.BytesIO()
         wb.save(output)
         output.seek(0)
-        
+
         headers = {
             'Content-Disposition': 'attachment; filename="guias_exportadas.xlsx"'
         }

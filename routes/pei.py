@@ -33,9 +33,12 @@ def apply_filters(query, search, status, validade_start, validade_end, venciment
             )
         )
     
-    # Status Enum
+    # Status Enum ('Inativo' = PEI de guia inativa; Validado/Pendente consideram apenas ativos)
     if status:
-        query = query.filter(PatientPei.status == status)
+        if status == 'Inativo':
+            query = query.filter(PatientPei.ativo == False)
+        else:
+            query = query.filter(PatientPei.status == status, PatientPei.ativo == True)
 
     # Date Range
     if validade_start:
@@ -78,30 +81,32 @@ def get_dashboard_stats(
     current_user = Depends(get_current_user)
 ):
     today = date.today()
-    
-    # Base query for active patients? Or just all?
-    # Stats: Vencidos, Vence D+7, Vence D+30
-    
+
+    # Dashboard conta apenas PEIs ativos (guias inativadas pelo cron saem das estatísticas)
+    ativo_filter = PatientPei.ativo == True
+
     # Vencidos
-    vencidos = db.query(func.count(PatientPei.id)).filter(PatientPei.validade < today).scalar()
-    
+    vencidos = db.query(func.count(PatientPei.id)).filter(PatientPei.validade < today, ativo_filter).scalar()
+
     # Vence D+7
     d7_end = today + timedelta(days=7)
     vence_d7 = db.query(func.count(PatientPei.id)).filter(
-        PatientPei.validade >= today, 
-        PatientPei.validade <= d7_end
+        PatientPei.validade >= today,
+        PatientPei.validade <= d7_end,
+        ativo_filter
     ).scalar()
-    
+
     # Vence D+30
     d30_end = today + timedelta(days=30)
     vence_d30 = db.query(func.count(PatientPei.id)).filter(
-        PatientPei.validade >= today, 
-        PatientPei.validade <= d30_end
+        PatientPei.validade >= today,
+        PatientPei.validade <= d30_end,
+        ativo_filter
     ).scalar()
-    
-    total = db.query(func.count(PatientPei.id)).scalar()
-    pendentes = db.query(func.count(PatientPei.id)).filter(PatientPei.status == 'Pendente').scalar()
-    validados = db.query(func.count(PatientPei.id)).filter(PatientPei.status == 'Validado').scalar()
+
+    total = db.query(func.count(PatientPei.id)).filter(ativo_filter).scalar()
+    pendentes = db.query(func.count(PatientPei.id)).filter(PatientPei.status == 'Pendente', ativo_filter).scalar()
+    validados = db.query(func.count(PatientPei.id)).filter(PatientPei.status == 'Validado', ativo_filter).scalar()
 
     return {
         "total": total,
@@ -117,7 +122,7 @@ def list_pei(
     page: int = 1,
     pageSize: int = 50,
     search: Optional[str] = None,
-    status: Optional[str] = None, # Validado, Pendente
+    status: Optional[str] = None, # Validado, Pendente, Inativo
     validade_start: Optional[date] = None,
     validade_end: Optional[date] = None,
     vencimento_filter: Optional[str] = None, # vencidos, vence_d7, vence_d30
@@ -134,6 +139,7 @@ def list_pei(
         PatientPei.pei_semanal,
         PatientPei.validade,
         PatientPei.status,
+        PatientPei.ativo,
         PatientPei.base_guia_id,
         BaseGuia.guia.label("guia_vinculada"),
         BaseGuia.sessoes_autorizadas,
@@ -164,6 +170,7 @@ def list_pei(
             "pei_semanal": row.pei_semanal,
             "validade": row.validade,
             "status": row.status,
+            "ativo": row.ativo if row.ativo is not None else True,
             "base_guia_id": row.base_guia_id,
             "guia_vinculada": row.guia_vinculada or "-",
             "sessoes_autorizadas": row.sessoes_autorizadas or 0,
@@ -225,6 +232,11 @@ def export_pei(
         
         # Exclude temporary patients from export
         query = query.filter(Carteirinha.is_temporary == False)
+
+        # Export exclui PEIs inativos, exceto quando o filtro explícito é
+        # "Inativo" (auditoria) — apply_filters já restringiu a consulta a eles
+        if status != 'Inativo':
+            query = query.filter(PatientPei.ativo == True)
 
         # Dedup: apenas o PEI mais recente por (id_paciente, codigo_procedimento)
         # — elimina guias duplicadas no export (multi-carteirinha do mesmo
