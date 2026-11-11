@@ -97,12 +97,24 @@ def list_jobs(
             query = query.filter(Job.valida_prestador['tipo_json'].astext == 'All Sucess')
         elif status_guias == 'bloqueadas':
             query = query.filter(Job.valida_prestador['tipo_json'].astext == 'Thered')
+        elif status_guias == 'vencidas':
+            # T2 (R1 marco (b)): dentro da janela 270d, validade < hoje
+            query = query.filter(Job.valida_prestador['tipo_json'].astext == 'Vencidas')
+        elif status_guias == 'antigas270':
+            # T2 (R1 marco (a)): guia existente, autorização fora da janela 270d
+            query = query.filter(Job.valida_prestador['tipo_json'].astext == 'Antigas270')
+        elif status_guias == 'negadas':
+            query = query.filter(Job.valida_prestador['tipo_json'].astext == 'Negadas')
         elif status_guias == 'sem_guias':
+            # Legado: jobs anteriores ao T2 usavam null/'Null' para TUDO que
+            # não era válida/bloqueada (antigas, vencidas, negadas, vazio).
+            # Novo fluxo grava "Sem Guias" explícito apenas p/ vazio real.
             query = query.filter(
                 or_(
                     Job.valida_prestador.is_(None),
                     Job.valida_prestador['tipo_json'].astext.is_(None),
-                    Job.valida_prestador['tipo_json'].astext == 'Null'
+                    Job.valida_prestador['tipo_json'].astext == 'Null',
+                    Job.valida_prestador['tipo_json'].astext == 'Sem Guias'
                 )
             )
     
