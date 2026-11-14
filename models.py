@@ -271,6 +271,23 @@ class ProtocoloArquivo(Base):
     lote_rel = relationship("ProtocoloLote", back_populates="arquivos")
 
 
+class InsightAcao(Base):
+    """Estado de notificação dos itens do painel de Insights (Importações).
+
+    tipo + referencia_id identificam o item — ex.: ('renovar_guia',
+    carteirinha_id) ou ('duas_carteirinhas', id_paciente). status 'notificado'
+    registra que o usuário já avisou/tratou aquele item (notified_at)."""
+    __tablename__ = "insight_acoes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tipo = Column(Text, nullable=False, index=True)
+    referencia_id = Column(Integer, index=True)
+    status = Column(Text, nullable=False, default="pendente")  # pendente | notificado
+    notified_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 # Event Listeners for Automatic PEI Calculation
 from sqlalchemy import event
 from sqlalchemy.orm import Session

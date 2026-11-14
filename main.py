@@ -165,6 +165,8 @@ from routes import workers
 app.include_router(workers.router)
 from routes import pei
 app.include_router(pei.router)
+from routes import insights
+app.include_router(insights.router)
 app.include_router(debug_optimization.router)
 app.include_router(protocolo.router)
 app.include_router(evolucoes.router)
